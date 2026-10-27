@@ -4,7 +4,7 @@ import time
 
 import eryx
 
-from sandbox_env import load_factory, out
+from sandbox_env import NUMPY_PACKAGES, load_factory, out
 
 CODE = """
 import numpy as np
@@ -28,14 +28,19 @@ result = {"shape": list(a.shape), "sum": float(a.sum())}
 
 
 def main() -> None:
-    factory = load_factory("numpy", ["numpy-wasi.tar.gz"], imports=["numpy"])
+    factory = load_factory("numpy", NUMPY_PACKAGES, imports=["numpy"])
 
     start = time.perf_counter()
     sandbox = factory.create_sandbox()
     print(f"sandbox created in {(time.perf_counter() - start) * 1000:.1f}ms")
 
-    result = sandbox.execute(CODE)
+    try:
+        result = sandbox.execute(CODE)
+    except eryx.ExecutionError as e:
+        raise SystemExit(f"sandbox error: {e}")
     print(out(result.stdout), end="")
+    if result.stderr:
+        print(out(result.stderr), end="")
     print("result:", result.result)
     print(f"took {result.duration_ms:.1f}ms")
 

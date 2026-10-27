@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 packages/
 wasi-build/work/
+test-results/
