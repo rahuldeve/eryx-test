@@ -1,0 +1,29 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[[package]]
+name = "eryx-test"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "pyeryx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pyeryx", specifier = ">=0.11.0" }]
+
+[[package]]
+name = "pyeryx"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/7b/b81358c48313a0243569ee6f637ad0b8a408e89d79dd7c4d4c43d29ccf22/pyeryx-0.11.0.tar.gz", hash = "sha256:1a336b4cbb5322696416c46050ebe080adb001007174e8da43977967896e1dd3", size = 9988426, upload-time = "2026-10-23T15:27:29.457Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/57/a6/32fd5eed23fb69287e87836e17c7d43487edf3542ca12634fdaea69786d5/pyeryx-0.11.0-cp312-abi3-macosx_10_12_x86_64.whl", hash = "sha256:27411b99fe214d7e58fdb18676a3c6b413f593569ef71bc9368d202405d365de", size = 35639735, upload-time = "2026-10-23T15:27:06.913Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/0b/bfdff68f3513a84844bc8b88ded258e2e0edb0b9dbb111309f80364da38f/pyeryx-0.11.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:83c403e68769d9fdcf2e0b394e1d959a4881da7aae1a4b842159670c19b492e7", size = 33578078, upload-time = "2026-10-23T15:27:10.177Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/5d/83d8e3f33403601cd2479c08e4020a5aa066afda8bb5f7a1b9a7909bfe45/pyeryx-0.11.0-cp312-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9f11f7af32bd173d56f6ccceae2f1866415d412aadf573ce470b522780de8c35", size = 34053871, upload-time = "2026-10-23T15:27:13.147Z" },
+    { url = "https://files.pythonhosted.org/packages/17/f9/0aff822ab409145b1763a1b7682c37df74fb1e0b19951dc5d0b39ee188d2/pyeryx-0.11.0-cp312-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:2730ccbe6a7fb07b2995e52d0163dda670cd340aba0469be09e35fb14a3c22f2", size = 36582257, upload-time = "2026-10-23T15:27:16.186Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/0a/cf48468028703028fd7ca10d5d259da0b5cb4ad7ab35b902ef35d9a80bea/pyeryx-0.11.0-cp312-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:14170474b5a356a10cc5cf30c24b198d4ddc841ac74bcd3deb75f5bf59236e80", size = 34258964, upload-time = "2026-10-23T15:27:19.833Z" },
+    { url = "https://files.pythonhosted.org/packages/5f/61/5a34fb430dbd086abfea9ff819c44ee3d172478fb4b063c0472c558f8b79/pyeryx-0.11.0-cp312-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:850eed83777c83d18ab626c3a8a6f7885a4e41c7134e552181611848643d6d17", size = 36707937, upload-time = "2026-10-23T15:27:23.043Z" },
+    { url = "https://files.pythonhosted.org/packages/bb/1d/3e94ea46ff748ad088b5cc90c8d9d8cf7605e1110e6650b32d410a755e42/pyeryx-0.11.0-cp312-abi3-win_amd64.whl", hash = "sha256:7a8975adb663c724a54c53f76ff1f2f582707af012a5b260d4c82a2c9345773f", size = 35176720, upload-time = "2026-10-23T15:27:26.277Z" },
+]

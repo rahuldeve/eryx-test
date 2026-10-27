@@ -1,0 +1,8 @@
+[project]
+name = "eryx-test"
+version = "0.1.0"
+description = "Eryx sandbox with numpy, pandas and bokeh support"
+requires-python = ">=3.12"
+dependencies = [
+    "pyeryx>=0.11.0",
+]
