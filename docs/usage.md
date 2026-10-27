@@ -5,7 +5,8 @@ repo: CPython 3.14 on wasm32-wasip2 via pyeryx 0.11, with numpy 2.4.6 and
 pandas 2.3.3 compiled by `wasi-build/build_packages.sh`, and bokeh 3.10.1 from
 PyPI (`scripts/fetch_packages.py`). Every item below was checked in the
 sandbox. Full test-suite results come from
-`scripts/run_builtin_tests.py` (`test-results/<suite>/summary.txt`).
+`tests/test_builtin_suites.py` (`uv run poe test-suites`; results in
+`test-results/<suite>/summary.txt`).
 
 - [1. Python](#1-python-general-usage-and-limitations): applies to all code
 - [2. numpy](#2-numpy)

@@ -2,13 +2,9 @@
 
 Each test file runs in a fresh sandbox, so a test that traps the wasm instance
 only takes its own file down. Uses the same marker selection as `numpy.test()`
-and `pandas.test()`.
-
-    uv run poe test numpy
-    uv run poe test pandas -k groupby   # files matching "groupby"
+and `pandas.test()`. Driven by test_builtin_suites.py.
 """
 
-import argparse
 import concurrent.futures
 import hashlib
 import os
@@ -242,59 +238,50 @@ def run_file(factory, site_packages, rel, args, log_path, limits) -> dict:
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument("suite", choices=SUITES)
-    parser.add_argument(
-        "-k", "--filter", help="only run test files whose path contains this"
-    )
-    parser.add_argument(
-        "-j", "--jobs", type=int, default=4, help="sandboxes in parallel (default 4)"
-    )
-    parser.add_argument(
-        "--timeout", type=int, default=1800, help="per-file timeout, seconds"
-    )
-    parser.add_argument(
-        "--memory-mb", type=int, default=2048, help="per-sandbox memory limit"
-    )
-    parser.add_argument("pytest_args", nargs="*", help="extra pytest args (after --)")
-    opts = parser.parse_args()
+def run_suite(
+    suite: str,
+    file_filter: str | None = None,
+    jobs: int = 4,
+    timeout: int = 1800,
+    memory_mb: int = 2048,
+) -> list[dict]:
+    """Run each test file of `suite` in its own sandbox, in `jobs` threads.
 
-    cfg = SUITES[opts.suite]
-    factory = load_factory(opts.suite, cfg["packages"], imports=cfg["imports"])
-    site_packages = build_test_site_packages(opts.suite)
+    Logs and summary.txt go to test-results/<suite>. Returns run_file's
+    result for every file, sorted by file.
+    """
+    cfg = SUITES[suite]
+    factory = load_factory(suite, cfg["packages"], imports=cfg["imports"])
+    site_packages = build_test_site_packages(suite)
 
     files = sorted(
         str(p.relative_to(site_packages))
-        for p in (site_packages / opts.suite).rglob("test_*.py")
-        if "/tests/" in str(p) and (not opts.filter or opts.filter in str(p))
+        for p in (site_packages / suite).rglob("test_*.py")
+        if "/tests/" in str(p) and (not file_filter or file_filter in str(p))
     )
     if not files:
-        raise SystemExit("no test files matched")
+        raise ValueError(f"no {suite} test files match {file_filter!r}")
 
-    out_dir = RESULTS_DIR / opts.suite
+    out_dir = RESULTS_DIR / suite
     shutil.rmtree(out_dir, ignore_errors=True)
     limits = eryx.ResourceLimits(
-        execution_timeout_ms=opts.timeout * 1000,
-        max_memory_bytes=opts.memory_mb * 1024 * 1024,
+        execution_timeout_ms=timeout * 1000,
+        max_memory_bytes=memory_mb * 1024 * 1024,
     )
-    args = [*cfg["args"], *opts.pytest_args]
     print(
-        f"running {len(files)} {opts.suite} test files, {opts.jobs} at a time; logs in {out_dir}"
+        f"running {len(files)} {suite} test files, {jobs} at a time; logs in {out_dir}"
     )
 
     results = []
     start = time.perf_counter()
-    with concurrent.futures.ThreadPoolExecutor(opts.jobs) as pool:
+    with concurrent.futures.ThreadPoolExecutor(jobs) as pool:
         futures = [
             pool.submit(
                 run_file,
                 factory,
                 site_packages,
                 rel,
-                args,
+                cfg["args"],
                 out_dir / (rel.removesuffix(".py") + ".log"),
                 limits,
             )
@@ -321,7 +308,7 @@ def main() -> None:
     crashed = [r for r in results if r["crash"]]
     failures = [f for r in results for f in r["failures"]]
 
-    report = [f"# {opts.suite} test suite in eryx", ""]
+    report = [f"# {suite} test suite in eryx", ""]
     report.append("totals: " + ", ".join(f"{n} {k}" for k, n in sorted(totals.items())))
     report.append(f"files: {len(files)}, crashed sandboxes: {len(crashed)}")
     report.append(f"wall time: {time.perf_counter() - start:.0f}s")
@@ -336,7 +323,4 @@ def main() -> None:
     (out_dir / "summary.txt").write_text("\n".join(report) + "\n")
     print("\n" + "\n".join(report[:5]))
     print(f"full summary: {out_dir / 'summary.txt'}")
-
-
-if __name__ == "__main__":
-    main()
+    return results

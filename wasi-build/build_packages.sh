@@ -8,7 +8,7 @@
 # with meson, pandas against this numpy.
 #
 # Output: ../packages/numpy-wasi.tar.gz, ../packages/pandas-wasi.tar.gz and
-# ../packages/pandas-tests.tar.gz (pandas' test suite, for run_builtin_tests.py)
+# ../packages/pandas-tests.tar.gz (pandas' test suite, for tests/test_builtin_suites.py)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -281,6 +281,6 @@ meson_build meson "$PANDAS_SRC" "toolchain-$TOOLCHAIN_KEY cython-$CYTHON_VERSION
 # pandas/tests is large and unused at runtime...
 tar -czf "$OUT/pandas-wasi.tar.gz" -C "$PANDAS_SITE" --exclude='pandas/tests' pandas
 echo "==> wrote $OUT/pandas-wasi.tar.gz"
-# ...but kept separately for scripts/run_builtin_tests.py
+# ...but kept separately for tests/test_builtin_suites.py
 tar -czf "$OUT/pandas-tests.tar.gz" -C "$PANDAS_SITE" pandas/tests
 echo "==> wrote $OUT/pandas-tests.tar.gz"

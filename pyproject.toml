@@ -20,19 +20,17 @@ dev = [
 fetch = { cmd = "python scripts/fetch_packages.py", help = "Download the pure-Python packages into ./packages" }
 build-wasi = { cmd = "bash wasi-build/build_packages.sh", help = "Cross-compile numpy and pandas for WASI (slow; set JOBS to limit parallelism)" }
 packages = { sequence = ["fetch", "build-wasi"], help = "Fetch and build every sandbox package" }
-smoke = { cmd = "python scripts/smoke_test.py", help = "Run a few snippets in a bare sandbox" }
-numpy = { cmd = "python scripts/run_numpy.py", help = "Run the numpy demo in a sandbox" }
-pandas = { cmd = "python scripts/run_pandas.py", help = "Run the pandas demo in a sandbox" }
-bokeh = { cmd = "python scripts/run_bokeh.py", help = "Build a bokeh plot in a sandbox" }
 dataframe = { cmd = "python scripts/run_dataframe_bokeh.py", help = "Plot a host DataFrame with bokeh in a sandbox" }
-test = { cmd = "python scripts/run_builtin_tests.py", help = "Run numpy's or pandas' test suite: poe test numpy|pandas [options]" }
-e2e = { cmd = "pytest tests", help = "Run the end-to-end sandbox tests" }
+test = { cmd = "pytest", help = "Run the sandbox tests (without the slow numpy/pandas suites)" }
+test-suites = { cmd = "pytest -m slow -s", help = "Run numpy's and pandas' own test suites (slow): poe test-suites [-k numpy|pandas] [--suite-filter PATH]" }
 fmt = { cmd = "ruff format", help = "Format the code" }
 lint = { cmd = "ruff check", help = "Lint the code" }
 
 [tool.pytest.ini_options]
 pythonpath = ["scripts"]
 testpaths = ["tests"]
+addopts = ["-m", "not slow"]
+markers = ["slow: numpy/pandas test suites, run with -m slow"]
 
 [tool.pyright]
 # scripts/ and tests/ import sandbox_env from scripts/ (pytest adds it via pythonpath)
