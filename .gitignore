@@ -4,3 +4,4 @@ __pycache__/
 packages/
 wasi-build/work/
 test-results/
+out/

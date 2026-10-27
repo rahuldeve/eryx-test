@@ -1,14 +1,16 @@
-# Using the eryx sandbox: Python, numpy and pandas
+# Using the eryx sandbox: Python, numpy, pandas and bokeh
 
 Notes for agents writing code that runs inside an eryx sandbox built by this
 repo: CPython 3.14 on wasm32-wasip2 via pyeryx 0.11, with numpy 2.4.6 and
-pandas 2.3.3 compiled by `wasi-build/build_packages.sh`. Every item below was
-checked in the sandbox. Full test-suite results come from
+pandas 2.3.3 compiled by `wasi-build/build_packages.sh`, and bokeh 3.10.1 from
+PyPI (`scripts/fetch_packages.py`). Every item below was checked in the
+sandbox. Full test-suite results come from
 `scripts/run_builtin_tests.py` (`test-results/<suite>/summary.txt`).
 
 - [1. Python](#1-python-general-usage-and-limitations): applies to all code
 - [2. numpy](#2-numpy)
 - [3. pandas](#3-pandas): pandas runs on numpy, so section 2 applies too
+- [4. bokeh](#4-bokeh): the bokeh sandbox includes numpy and pandas
 
 ---
 
@@ -41,6 +43,10 @@ more than 4 GiB.
 - `os.makedirs(path, exist_ok=True)` works. `pathlib.Path.mkdir(parents=True)`
   fails with `OSError: [Errno 29] I/O error` when parents are missing.
 - `tempfile` works once `/tmp` is mounted.
+- `HOME` is `/tmp`. WASI has no home directory, and without `HOME` (or the
+  `pwd` module, 1.4) `Path.home()` raises, so this repo's sandboxes set it at
+  startup (`scripts/sandbox_site/sitecustomize.py`). Like the rest of `/tmp`,
+  `~` is only writable if the host mounts it.
 - Python packages live read-only under `/site-packages` and the stdlib under
   `/python-stdlib`.
 
@@ -97,7 +103,7 @@ the host when the run ends.
 - The local time zone is UTC (`time.tzname == ('UTC', 'UTC')`).
 - There is no system time-zone database. `zoneinfo.ZoneInfo("Asia/Kolkata")`
   only works if the `tzdata` package is installed in the sandbox. The pandas
-  sandbox has it; the numpy-only sandbox doesn't.
+  and bokeh sandboxes have it; the numpy-only sandbox doesn't.
 
 ### 1.9 Resource limits set by the host
 
@@ -301,3 +307,67 @@ For anyone reading `test-results/pandas/summary.txt`:
 - **12 `worker_id` errors:** pytest-xdist isn't installed in the sandbox. The
   test runner now supplies the fixture (these tests then pass or skip), but
   the last full run predates that fix.
+
+---
+
+## 4. bokeh
+
+bokeh is pure Python. The sandbox has bokeh 3.10.1 with its dependencies
+jinja2, MarkupSafe, PyYAML, narwhals, packaging and xyzservices, on top of the
+pandas sandbox. MarkupSafe and PyYAML are their pure-Python builds, without C
+speedups. tornado (bokeh server) and Pillow (image export) are left out.
+
+Building documents works: figures and glyphs (`line`, `scatter`, `vbar`,
+`image`, `image_rgba`, `hexbin`, ...), datetime and categorical axes,
+`ColumnDataSource` from DataFrames and groupbys, layouts, widgets with
+`CustomJS` callbacks, themes (including YAML theme files), map tiles via
+xyzservices, and the WebGL backend. numpy scalars as property values (e.g.
+`Span(location=df["a"].max())`) are fine; they don't hit the numpy scalar-copy
+crash (2.3).
+
+### 4.1 Getting a plot out
+
+There is no browser, display or server, so render the document to HTML or JSON
+and hand that to the host:
+
+| Call                                           | Result                                                    |
+|------------------------------------------------|-----------------------------------------------------------|
+| `file_html(obj, CDN, "title")`                 | a complete HTML page as a string                          |
+| `json_item(obj)`                               | a dict for `Bokeh.embed.embed_item` in the host's page    |
+| `components(obj)`                              | a `<script>` and a `<div>` to place in an existing page   |
+| `save(obj, "/out/plot.html", resources=CDN)`   | the HTML page as a file, on a mounted volume only (1.3)   |
+
+- Return the string in `result` or print it, rather than writing a file, when
+  no volume is mounted.
+- `show(obj)` writes the file but can't open a browser; it doesn't raise.
+- **Resources:** with `CDN`, the page is small (about 15 KB for a simple
+  plot) but the viewer's browser loads BokehJS from cdn.bokeh.org. With
+  `INLINE`, BokehJS is embedded and the page works offline, but each page is
+  about 1.4 MB. Map tiles are fetched by the viewer's browser too, so neither
+  needs network access in the sandbox.
+
+### 4.2 Not available
+
+- **bokeh server:** `bokeh serve`, `bokeh.server`, `curdoc()` callbacks and
+  `push_notebook` need tornado (`ModuleNotFoundError: No module named
+  'tornado'`), which isn't installed. Python callbacks can't run anyway; use
+  `CustomJS` for interactivity.
+- **Notebook output:** `output_notebook()` needs IPython, which isn't installed.
+- **PNG/SVG export:** `export_png`, `export_svg` and `get_screenshot_as_png`
+  need selenium, a browser and Pillow. Export the HTML instead.
+- **Contours:** `figure.contour` and `contour_data` need contourpy, a C++
+  extension that isn't built (`ModuleNotFoundError: No module named
+  'contourpy'`).
+- **PIL images as glyph data:** Pillow isn't installed. Pass numpy arrays to
+  `image` / `image_rgba`.
+- **Custom TypeScript extensions:** compiling them needs node.js, which can't
+  run (1.5). Built-in models and `CustomJS` work.
+- **`bokeh.sampledata`:** the separate `bokeh_sampledata` package isn't
+  installed.
+
+### 4.3 Data size
+
+Column data is embedded in the page, so its size grows with the data: a
+200,000-point scatter makes a 4 MB page (generated in ~0.5 s). Aggregate or
+downsample large data in pandas before plotting (`hexbin` and `image` are
+compact ways to show dense data).
