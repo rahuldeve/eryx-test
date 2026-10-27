@@ -9,7 +9,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "numpy==2.4.6",
+    "pandas==2.3.3",
     "poethepoet>=0.49.0",
+    "pytest>=9.1.1",
     "ruff>=0.17.3",
 ]
 
@@ -21,6 +24,16 @@ smoke = { cmd = "python scripts/smoke_test.py", help = "Run a few snippets in a 
 numpy = { cmd = "python scripts/run_numpy.py", help = "Run the numpy demo in a sandbox" }
 pandas = { cmd = "python scripts/run_pandas.py", help = "Run the pandas demo in a sandbox" }
 bokeh = { cmd = "python scripts/run_bokeh.py", help = "Build a bokeh plot in a sandbox" }
+dataframe = { cmd = "python scripts/run_dataframe_bokeh.py", help = "Plot a host DataFrame with bokeh in a sandbox" }
 test = { cmd = "python scripts/run_builtin_tests.py", help = "Run numpy's or pandas' test suite: poe test numpy|pandas [options]" }
+e2e = { cmd = "pytest tests", help = "Run the end-to-end sandbox tests" }
 fmt = { cmd = "ruff format", help = "Format the code" }
 lint = { cmd = "ruff check", help = "Lint the code" }
+
+[tool.pytest.ini_options]
+pythonpath = ["scripts"]
+testpaths = ["tests"]
+
+[tool.pyright]
+# scripts/ and tests/ import sandbox_env from scripts/ (pytest adds it via pythonpath)
+extraPaths = ["scripts"]
