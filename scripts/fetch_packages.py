@@ -130,7 +130,7 @@ def main() -> None:
         dest.with_name(dest.name + ".tmp").rename(dest)
     for name in LOCAL_PACKAGES:
         if not (PACKAGES_DIR / name).exists():
-            print(f"missing  {name} (run: bash wasi-build/build_packages.sh)")
+            print(f"missing  {name} (run: uv run poe build-wasi)")
     print(f"packages in {PACKAGES_DIR}")
 
 

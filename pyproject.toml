@@ -9,5 +9,18 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "poethepoet>=0.49.0",
     "ruff>=0.17.3",
 ]
+
+[tool.poe.tasks]
+fetch = { cmd = "python scripts/fetch_packages.py", help = "Download the pure-Python packages into ./packages" }
+build-wasi = { cmd = "bash wasi-build/build_packages.sh", help = "Cross-compile numpy and pandas for WASI (slow; set JOBS to limit parallelism)" }
+packages = { sequence = ["fetch", "build-wasi"], help = "Fetch and build every sandbox package" }
+smoke = { cmd = "python scripts/smoke_test.py", help = "Run a few snippets in a bare sandbox" }
+numpy = { cmd = "python scripts/run_numpy.py", help = "Run the numpy demo in a sandbox" }
+pandas = { cmd = "python scripts/run_pandas.py", help = "Run the pandas demo in a sandbox" }
+bokeh = { cmd = "python scripts/run_bokeh.py", help = "Build a bokeh plot in a sandbox" }
+test = { cmd = "python scripts/run_builtin_tests.py", help = "Run numpy's or pandas' test suite: poe test numpy|pandas [options]" }
+fmt = { cmd = "ruff format", help = "Format the code" }
+lint = { cmd = "ruff check", help = "Lint the code" }

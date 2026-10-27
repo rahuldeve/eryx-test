@@ -89,10 +89,7 @@ def cache_paths(name: str, packages: list[str]) -> tuple[pathlib.Path, pathlib.P
     paths = [PACKAGES_DIR / p for p in packages]
     missing = [p.name for p in paths if not p.exists()]
     if missing:
-        raise SystemExit(
-            f"missing packages: {missing}\n"
-            "run: uv run scripts/fetch_packages.py && bash wasi-build/build_packages.sh"
-        )
+        raise SystemExit(f"missing packages: {missing}\nrun: uv run poe packages")
 
     digest = hashlib.sha256()
     for p in paths:

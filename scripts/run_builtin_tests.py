@@ -4,8 +4,8 @@ Each test file runs in a fresh sandbox, so a test that traps the wasm instance
 only takes its own file down. Uses the same marker selection as `numpy.test()`
 and `pandas.test()`.
 
-    uv run scripts/run_builtin_tests.py numpy
-    uv run scripts/run_builtin_tests.py pandas -k groupby   # files matching "groupby"
+    uv run poe test numpy
+    uv run poe test pandas -k groupby   # files matching "groupby"
 """
 
 import argparse
