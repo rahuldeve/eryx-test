@@ -129,10 +129,10 @@ Because wasm32 is a 32-bit platform (1.2), `np.intp`, and with it numpy's
 default integer, is `int32`:
 
 ```python
-np.array([1]).dtype      # int32  (int64 on a normal 64-bit machine)
-np.arange(3).dtype       # int32
-np.array([2**31 - 1]) + 1           # array([-2147483648]), no error or warning
-np.full(3, 2**30).sum()             # -1073741824, overflowed silently
+np.array([1]).dtype  # int32  (int64 on a normal 64-bit machine)
+np.arange(3).dtype  # int32
+np.array([2**31 - 1]) + 1  # array([-2147483648]), no error or warning
+np.full(3, 2**30).sum()  # -1073741824, overflowed silently
 ```
 
 Integer sums, products, `cumsum` and counters overflow at 2**31 with no error.
@@ -145,10 +145,10 @@ do give an `int64` array (`np.array([2**40]).dtype` is `int64`).
 wasm has no floating-point exception flags, so numpy never sees errors:
 
 ```python
-np.array([1.0]) / 0          # [inf]  no RuntimeWarning
-np.sqrt(np.array([-1.0]))    # [nan]  no RuntimeWarning
+np.array([1.0]) / 0  # [inf]  no RuntimeWarning
+np.sqrt(np.array([-1.0]))  # [nan]  no RuntimeWarning
 with np.errstate(all="raise"):
-    np.exp(np.array([1000.0]))   # [inf]  does NOT raise FloatingPointError
+    np.exp(np.array([1000.0]))  # [inf]  does NOT raise FloatingPointError
 ```
 
 Don't rely on warnings or `np.errstate` to detect bad values. Check the results
@@ -157,7 +157,7 @@ explicitly with `np.isfinite`, `np.isnan` or `np.isinf`.
 ### 2.3 `copy.copy()` of a numpy scalar crashes the sandbox
 
 ```python
-copy.copy(np.float64(1.5))   # wasm trap: the whole execution dies (see 1.1)
+copy.copy(np.float64(1.5))  # wasm trap: the whole execution dies (see 1.1)
 ```
 
 This affects every numpy scalar type (`np.float64`, `np.int32`, `np.bool`,

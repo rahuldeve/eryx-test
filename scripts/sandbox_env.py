@@ -69,7 +69,10 @@ def extract(paths: list[pathlib.Path], dest: pathlib.Path) -> None:
 def pack_site_package() -> None:
     """Pack SITE_DIR reproducibly, so the factory cache key only changes with it."""
     buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz, tarfile.open(fileobj=gz, mode="w") as tf:
+    with (
+        gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz,
+        tarfile.open(fileobj=gz, mode="w") as tf,
+    ):
         for path in sorted(SITE_DIR.glob("*.py")):
             data = path.read_bytes()
             info = tarfile.TarInfo(path.name)
@@ -98,7 +101,9 @@ def cache_paths(name: str, packages: list[str]) -> tuple[pathlib.Path, pathlib.P
     return PACKAGES_DIR / f"{key}.bin", PACKAGES_DIR / f"{key}-site-packages"
 
 
-def load_factory(name: str, packages: list[str], imports: list[str]) -> eryx.SandboxFactory:
+def load_factory(
+    name: str, packages: list[str], imports: list[str]
+) -> eryx.SandboxFactory:
     """Return a factory with `packages` installed and `imports` pre-imported.
 
     Building takes 15-25s, so the factory is cached per eryx version and package

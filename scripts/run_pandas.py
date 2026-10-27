@@ -3,7 +3,6 @@
 import time
 
 import eryx
-
 from sandbox_env import PANDAS_PACKAGES, load_factory, out
 
 CODE = """

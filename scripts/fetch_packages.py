@@ -88,10 +88,18 @@ def repack_sdist(sdist: pathlib.Path, pkg_dir: str, dest: pathlib.Path) -> None:
         top = src.getnames()[0].split("/")[0]
         prefix = f"{top}/{pkg_dir}/"
         for member in src.getmembers():
-            if member.isfile() and member.name.startswith(prefix) and not member.name.endswith(".c"):
+            if (
+                member.isfile()
+                and member.name.startswith(prefix)
+                and not member.name.endswith(".c")
+            ):
                 rel = member.name.removeprefix(prefix)
                 member_out = tarfile.TarInfo(f"{pkg_dir.rsplit('/', 1)[-1]}/{rel}")
-                member_out.size, member_out.mtime, member_out.mode = member.size, member.mtime, 0o644
+                member_out.size, member_out.mtime, member_out.mode = (
+                    member.size,
+                    member.mtime,
+                    0o644,
+                )
                 out.addfile(member_out, src.extractfile(member))
         # PKG-INFO doubles as dist-info METADATA, so importlib.metadata finds it
         metadata = src.extractfile(f"{top}/PKG-INFO").read()

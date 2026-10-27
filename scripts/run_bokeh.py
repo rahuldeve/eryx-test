@@ -5,7 +5,6 @@ import tempfile
 import time
 
 import eryx
-
 from sandbox_env import BOKEH_PACKAGES, load_factory, out
 
 CODE = """
@@ -48,7 +47,9 @@ result = {"html_bytes": len(html), "json_item_keys": sorted(item)}
 
 
 def main() -> None:
-    factory = load_factory("bokeh", BOKEH_PACKAGES, imports=["numpy", "pandas", "bokeh.plotting"])
+    factory = load_factory(
+        "bokeh", BOKEH_PACKAGES, imports=["numpy", "pandas", "bokeh.plotting"]
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         start = time.perf_counter()
@@ -68,7 +69,9 @@ def main() -> None:
         print("result:", result.result)
         print(f"took {result.duration_ms:.1f}ms")
 
-        dest = pathlib.Path(__file__).resolve().parent.parent / "out" / "bokeh-demo.html"
+        dest = (
+            pathlib.Path(__file__).resolve().parent.parent / "out" / "bokeh-demo.html"
+        )
         dest.parent.mkdir(exist_ok=True)
         dest.write_text(pathlib.Path(tmp, "plot.html").read_text())
         print(f"plot written to {dest}")

@@ -3,7 +3,6 @@
 import time
 
 import eryx
-
 from sandbox_env import NUMPY_PACKAGES, load_factory, out
 
 CODE = """
