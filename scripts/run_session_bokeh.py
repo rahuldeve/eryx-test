@@ -19,6 +19,7 @@ import eryx
 from run_dataframe_bokeh import PAGE, make_weather
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out, shared_frames
+from eryx_sandbox.pydantic_capability import prepare_cell
 
 PREAMBLE = """
 import pandas as pd
@@ -68,19 +69,13 @@ OUT_DIR = pathlib.Path(__file__).resolve().parent.parent / "out"
 def run_cell(session: eryx.Session, code: str) -> eryx.ExecuteResult:
     """Run `code`, echoing it and its output like a REPL.
 
-    A bare expression on the last line is printed, as a REPL would.
+    A bare last expression is printed, as a REPL would.
     """
-    lines = code.strip().splitlines()
-    for i, line in enumerate(lines):
+    code = code.strip()
+    for i, line in enumerate(code.splitlines()):
         print(("... " if i else ">>> ") + line)
     try:
-        compile(lines[-1], "<cell>", "eval")
-    except SyntaxError:
-        pass
-    else:
-        lines[-1] = f"print(repr({lines[-1]}))"
-    try:
-        result = session.execute("\n".join(lines))
+        result = session.execute(prepare_cell(code))
     except eryx.ExecutionError as e:
         raise SystemExit(f"sandbox error: {e}")
     print(out(result.stdout), end="")

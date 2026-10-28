@@ -7,6 +7,8 @@ dependencies = [
     "pyeryx>=0.11.0",
     "numpy==2.4.6",
     "pandas==2.3.3",
+    "pydantic-ai-slim[anthropic]>=2.63.0",
+    "pydantic-ai-harness>=0.63.0",
 ]
 
 [build-system]
@@ -29,6 +31,7 @@ build-wasi = { cmd = "bash wasi-build/build_packages.sh", help = "Cross-compile 
 packages = { sequence = ["fetch", "build-wasi"], help = "Fetch and build every sandbox package" }
 dataframe = { cmd = "python scripts/run_dataframe_bokeh.py", help = "Plot a host DataFrame with bokeh in a sandbox" }
 session = { cmd = "python scripts/run_session_bokeh.py", help = "Plot a host DataFrame with bokeh from a snapshotted session, REPL style" }
+agent = { cmd = "python scripts/run_agent_repl.py", help = "Let a pydantic-ai agent analyse a host DataFrame through the eryx REPL capability (needs ANTHROPIC_API_KEY)" }
 test = { cmd = "pytest", help = "Run the sandbox tests (without the slow numpy/pandas suites)" }
 test-suites = { cmd = "pytest -m slow -s", help = "Run numpy's and pandas' own test suites (slow): poe test-suites [-k numpy|pandas] [--suite-filter PATH]" }
 fmt = { cmd = "ruff format", help = "Format the code" }

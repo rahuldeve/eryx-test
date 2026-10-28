@@ -45,4 +45,32 @@ print(result.result)
 The first `load_factory` call for a package set takes 15-25s; later ones load
 from the cache in `packages/` (set `ERYX_PACKAGES_DIR` to use another directory).
 
+## As a pydantic-ai capability
+
+`eryx_sandbox.pydantic_capability.EryxRepl` turns a persistent eryx session
+into a REPL for a [pydantic-ai](https://pydantic.dev/docs/ai/) agent. `run_code` returns each
+cell's stdout/stderr, and `repl_history` returns the code and output of earlier
+cells. The instructions list every cell run so far. Old results cleared by
+pydantic-ai-harness's `ClearToolResults` are replaced with a pointer such as
+`[output of cell 3 cleared: call repl_history(cell=3)]`, as long as
+`ClearToolResults` uses `CLEARED_MARKER` and comes first:
+
+```python
+from eryx_sandbox.pydantic_capability import CLEARED_MARKER, EryxRepl
+from pydantic_ai_harness.compaction import ClearToolResults
+
+repl = EryxRepl(factory, snapshot=session.snapshot_state())
+agent = Agent(
+    "anthropic:claude-sonnet-5-5",
+    capabilities=[ClearToolResults(max_tokens=50_000, placeholder=CLEARED_MARKER), repl],
+)
+```
+
+The session and its history last as long as the `EryxRepl` instance, across
+`agent.run()` calls. An instance can only be used by one agent, and should
+serve one conversation at a time. A cell that times out or
+runs out of memory breaks the eryx session for good. The capability then starts
+a new session (restoring `snapshot`, if given) and tells the model that its
+variables are gone. `uv run poe agent` runs a demo (needs `ANTHROPIC_API_KEY`).
+
 All codebase inside this repo was authored by Claude
