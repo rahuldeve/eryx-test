@@ -21,6 +21,7 @@ fetch = { cmd = "python scripts/fetch_packages.py", help = "Download the pure-Py
 build-wasi = { cmd = "bash wasi-build/build_packages.sh", help = "Cross-compile numpy and pandas for WASI (slow; set JOBS to limit parallelism)" }
 packages = { sequence = ["fetch", "build-wasi"], help = "Fetch and build every sandbox package" }
 dataframe = { cmd = "python scripts/run_dataframe_bokeh.py", help = "Plot a host DataFrame with bokeh in a sandbox" }
+session = { cmd = "python scripts/run_session_bokeh.py", help = "Plot a host DataFrame with bokeh from a snapshotted session, REPL style" }
 test = { cmd = "pytest", help = "Run the sandbox tests (without the slow numpy/pandas suites)" }
 test-suites = { cmd = "pytest -m slow -s", help = "Run numpy's and pandas' own test suites (slow): poe test-suites [-k numpy|pandas] [--suite-filter PATH]" }
 fmt = { cmd = "ruff format", help = "Format the code" }

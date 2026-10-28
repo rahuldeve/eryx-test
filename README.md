@@ -14,6 +14,9 @@ uv run poe packages           # download the pure-Python packages, then cross-co
                               # numpy and pandas for WASI (slow; JOBS=8 limits parallelism)
 uv run poe dataframe          # demo: plot a host DataFrame with bokeh in a sandbox,
                               # written to out/dataframe-bokeh.html
+uv run poe session            # demo: snapshot a session with the DataFrame loaded,
+                              # restore it and plot cell by cell, REPL style,
+                              # written to out/session-bokeh.html
 uv run poe test               # smoke and end-to-end tests
 uv run poe test-suites        # numpy's and pandas' own test suites (~30 min)
 uv run poe test-suites -k pandas --suite-filter groupby
