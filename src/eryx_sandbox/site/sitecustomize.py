@@ -1,4 +1,4 @@
-"""Runs at interpreter startup inside every sandbox (packed by sandbox_env.py)."""
+"""Runs at interpreter startup inside every sandbox (packed by eryx_sandbox.factory)."""
 
 import os
 

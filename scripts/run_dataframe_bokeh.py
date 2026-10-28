@@ -1,7 +1,7 @@
 """Plot a host-built DataFrame with bokeh inside an eryx sandbox.
 
 The frame reaches the sandbox as a pickle on a read-only volume
-(`sandbox_env.shared_frames`). The sandbox returns bokeh's `json_item` for the
+(`eryx_sandbox.factory.shared_frames`). The sandbox returns bokeh's `json_item` for the
 plot, which the host embeds in an HTML page with BokehJS.
 """
 
@@ -12,7 +12,8 @@ import time
 import eryx
 import numpy as np
 import pandas as pd
-from sandbox_env import BOKEH_PACKAGES, load_factory, out, shared_frames
+
+from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out, shared_frames
 
 CODE = """
 import pandas as pd

@@ -14,18 +14,18 @@ import zipfile
 from collections.abc import Generator
 from typing import Any
 
-# The numpy/pandas component is too large for eryx's default pooling allocator
-# ("component instance size does not fit in pooling allocator requirements").
-# Must be set before eryx is imported.
-os.environ.setdefault("ERYX_ALLOCATOR", "on-demand")
+import eryx
 
-import eryx  # noqa: E402
-
-PACKAGES_DIR = pathlib.Path(__file__).resolve().parent.parent / "packages"
+# The repo's packages/ directory (see scripts/fetch_packages.py and
+# wasi-build/build_packages.sh), unless ERYX_PACKAGES_DIR points elsewhere
+PACKAGES_DIR = pathlib.Path(
+    os.environ.get("ERYX_PACKAGES_DIR")
+    or pathlib.Path(__file__).resolve().parents[2] / "packages"
+)
 
 # Files installed into every sandbox (sitecustomize.py), packed into
 # PACKAGES_DIR / SITE_PACKAGE
-SITE_DIR = pathlib.Path(__file__).resolve().parent / "sandbox_site"
+SITE_DIR = pathlib.Path(__file__).resolve().parent / "site"
 SITE_PACKAGE = "eryx-site.tar.gz"
 
 # Package sets, as file names in PACKAGES_DIR (see fetch_packages.py and

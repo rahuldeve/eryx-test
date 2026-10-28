@@ -9,8 +9,9 @@ import eryx
 import pytest
 from run_dataframe_bokeh import make_weather
 from run_session_bokeh import CELLS, LIMITS, make_snapshot
-from sandbox_env import BOKEH_PACKAGES, load_factory
 from test_dataframe_bokeh import find_objects
+
+from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory
 
 
 @pytest.fixture(scope="module")

@@ -46,7 +46,7 @@ more than 4 GiB.
 - `tempfile` works once `/tmp` is mounted.
 - `HOME` is `/tmp`. WASI has no home directory, and without `HOME` (or the
   `pwd` module, 1.4) `Path.home()` raises, so this repo's sandboxes set it at
-  startup (`scripts/sandbox_site/sitecustomize.py`). Like the rest of `/tmp`,
+  startup (`src/eryx_sandbox/site/sitecustomize.py`). Like the rest of `/tmp`,
   `~` is only writable if the host mounts it.
 - Python packages live read-only under `/site-packages` and the stdlib under
   `/python-stdlib`.

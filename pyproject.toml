@@ -9,6 +9,13 @@ dependencies = [
     "pandas==2.3.3",
 ]
 
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "eryx_sandbox"
+
 [dependency-groups]
 dev = [
     "poethepoet>=0.49.0",
@@ -34,5 +41,5 @@ addopts = ["-m", "not slow"]
 markers = ["slow: numpy/pandas test suites, run with -m slow"]
 
 [tool.pyright]
-# scripts/ and tests/ import sandbox_env from scripts/ (pytest adds it via pythonpath)
+# tests/ import the demo scripts from scripts/ (pytest adds it via pythonpath)
 extraPaths = ["scripts"]

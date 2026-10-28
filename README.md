@@ -22,13 +22,14 @@ uv run poe test-suites        # numpy's and pandas' own test suites (~30 min)
 uv run poe test-suites -k pandas --suite-filter groupby
 ```
 
-To run your own code, build a sandbox from a cached factory and pass host
-DataFrames in as pickles on a read-only mount (see
-`scripts/run_dataframe_bokeh.py`; `sandbox_env` lives in `scripts/`, so run with
-`PYTHONPATH=scripts`):
+The code lives in the `eryx_sandbox` package (`src/eryx_sandbox/`), which
+`uv sync` installs in editable mode; `scripts/` holds the demos and the package
+build tooling. To run your own code, build a sandbox from a cached factory and
+pass host DataFrames in as pickles on a read-only mount (see
+`scripts/run_dataframe_bokeh.py`):
 
 ```python
-from sandbox_env import BOKEH_PACKAGES, load_factory, shared_frames
+from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, shared_frames
 
 factory = load_factory("bokeh", BOKEH_PACKAGES, imports=["numpy", "pandas", "bokeh.plotting"])
 with shared_frames({"sales": df}) as volumes:
@@ -42,6 +43,6 @@ print(result.result)
 ```
 
 The first `load_factory` call for a package set takes 15-25s; later ones load
-from the cache in `packages/`.
+from the cache in `packages/` (set `ERYX_PACKAGES_DIR` to use another directory).
 
 All codebase inside this repo was authored by Claude

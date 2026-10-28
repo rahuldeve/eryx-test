@@ -2,7 +2,8 @@
 
 import eryx
 import pytest
-from sandbox_env import out
+
+from eryx_sandbox.factory import out
 
 
 @pytest.fixture(scope="module")

@@ -1,7 +1,7 @@
 """End to end: a DataFrame built on the host is plotted with bokeh in a sandbox.
 
 Runs the code from scripts/run_dataframe_bokeh.py: the frame reaches the
-sandbox as a pickle on a read-only volume (`sandbox_env.shared_frames`), and the
+sandbox as a pickle on a read-only volume (`eryx_sandbox.factory.shared_frames`), and the
 sandbox returns bokeh's `json_item` for the plot, which is checked against the
 original frame.
 """
@@ -14,7 +14,8 @@ import numpy as np
 import pandas as pd
 import pytest
 from run_dataframe_bokeh import CODE, make_weather
-from sandbox_env import BOKEH_PACKAGES, load_factory, shared_frames
+
+from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, shared_frames
 
 
 @pytest.fixture(scope="module")

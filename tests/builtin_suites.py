@@ -16,7 +16,8 @@ import tempfile
 import time
 
 import eryx
-from sandbox_env import (
+
+from eryx_sandbox.factory import (
     NUMPY_PACKAGES,
     PACKAGES_DIR,
     PANDAS_PACKAGES,

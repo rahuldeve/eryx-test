@@ -1,7 +1,7 @@
 """Plot a host-built DataFrame with bokeh from a snapshotted eryx session.
 
 A preamble session loads the frame from its pickle on a read-only volume
-(`sandbox_env.shared_frames`) and its state is saved with `snapshot_state()`.
+(`eryx_sandbox.factory.shared_frames`) and its state is saved with `snapshot_state()`.
 A fresh session restores that snapshot, so the frame is already loaded and the
 volume is no longer needed, then runs code cell by cell, REPL style. The last
 cell returns bokeh's `json_item` for the plot, which the host embeds in an HTML
@@ -17,7 +17,8 @@ import time
 
 import eryx
 from run_dataframe_bokeh import PAGE, make_weather
-from sandbox_env import BOKEH_PACKAGES, load_factory, out, shared_frames
+
+from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out, shared_frames
 
 PREAMBLE = """
 import pandas as pd
