@@ -28,6 +28,7 @@ import pathlib
 import pickle
 import re
 import tempfile
+import threading
 import time
 import weakref
 from collections.abc import Mapping, Sequence
@@ -133,7 +134,9 @@ class EryxRepl(AbstractCapability[Any]):
     instance belongs to the first agent it is given to; another agent gets a `ValueError`. It should also serve one
     conversation at a time, which isn't checked: concurrent runs of its agent
     share variables and history. Tool calls in one model response run one at a
-    time, in order.
+    time, in order. Cancelling `run_code` doesn't stop its cell (it runs in a
+    thread): the next cell, and `reset()`, wait for it to finish or time out, and
+    it is still recorded.
     """
 
     factory: eryx.SandboxFactory | None = None
@@ -180,6 +183,10 @@ class EryxRepl(AbstractCapability[Any]):
     _cells: list[Cell] = field(default_factory=list, init=False, repr=False)
     _stdout: list[bytes] = field(default_factory=list, init=False, repr=False)
     _stderr: list[bytes] = field(default_factory=list, init=False, repr=False)
+    # held while a cell runs, so a cancelled cell can't overlap the next one
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False
+    )
     _agent: weakref.ref[AbstractAgent[Any, Any]] | None = field(
         default=None, init=False, repr=False
     )
@@ -220,8 +227,9 @@ class EryxRepl(AbstractCapability[Any]):
 
     def reset(self) -> None:
         """Drop the session and the cell history; the next cell starts fresh."""
-        self._session = None
-        self._cells.clear()
+        with self._lock:
+            self._session = None
+            self._cells.clear()
 
     def get_toolset(self) -> FunctionToolset[Any]:
         return self._toolset
@@ -345,33 +353,38 @@ class EryxRepl(AbstractCapability[Any]):
         The callbacks are needed because `ExecutionError` keeps stderr but not
         what the cell printed to stdout before it raised.
         """
-        session = self._get_session()
-        self._stdout.clear()
-        self._stderr.clear()
-        error = None
-        start = time.perf_counter()
-        try:
-            session.execute(prepare_cell(code))
-        except eryx.TimeoutError:
-            error = f"timed out after {self.execution_timeout_ms} ms" + self._restart()
-        except eryx.ResourceLimitError as e:
-            error = f"resource limit exceeded: {e}" + self._restart()
-        except eryx.ExecutionError as e:
-            if str(e).startswith(_WASM_TRAP):
-                error = f"sandbox crashed: {e}" + self._restart()
-            else:
-                error = _exception_name(str(e))
-        stderr = _WRAPPER_FRAME.sub("", b"".join(self._stderr).decode(errors="replace"))
-        cell = Cell(
-            number=len(self._cells) + 1,
-            code=code,
-            stdout=b"".join(self._stdout).decode(errors="replace"),
-            stderr=stderr,
-            error=error,
-            duration_ms=(time.perf_counter() - start) * 1000,
-        )
-        self._cells.append(cell)
-        return cell
+        with self._lock:
+            session = self._get_session()
+            self._stdout.clear()
+            self._stderr.clear()
+            error = None
+            start = time.perf_counter()
+            try:
+                session.execute(prepare_cell(code))
+            except eryx.TimeoutError:
+                error = (
+                    f"timed out after {self.execution_timeout_ms} ms" + self._restart()
+                )
+            except eryx.ResourceLimitError as e:
+                error = f"resource limit exceeded: {e}" + self._restart()
+            except eryx.ExecutionError as e:
+                if str(e).startswith(_WASM_TRAP):
+                    error = f"sandbox crashed: {e}" + self._restart()
+                else:
+                    error = _exception_name(str(e))
+            stderr = _WRAPPER_FRAME.sub(
+                "", b"".join(self._stderr).decode(errors="replace")
+            )
+            cell = Cell(
+                number=len(self._cells) + 1,
+                code=code,
+                stdout=b"".join(self._stdout).decode(errors="replace"),
+                stderr=stderr,
+                error=error,
+                duration_ms=(time.perf_counter() - start) * 1000,
+            )
+            self._cells.append(cell)
+            return cell
 
 
 def _render_cell(cell: Cell, output: bool) -> str:

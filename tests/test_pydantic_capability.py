@@ -3,6 +3,7 @@
 Uses a bare `eryx.Session` rather than a package factory, so these run in seconds.
 """
 
+import asyncio
 import gc
 import pickle
 import warnings
@@ -283,6 +284,23 @@ def test_timeout_restarts_session(repl: EryxRepl) -> None:
     )
     assert lost.error == "NameError"
     assert fresh.stdout == "2\n"
+
+
+def test_cancelled_cell_finishes_before_the_next(repl: EryxRepl) -> None:
+    # the cancelled cell keeps running in its thread; the next one must wait for it
+    slow = (
+        "import time\nt = time.time()\nwhile time.time() - t < 1: pass\nprint('slow')"
+    )
+
+    async def main() -> str:
+        task = asyncio.create_task(repl.run_code(None, slow))  # type: ignore[arg-type]
+        await asyncio.sleep(0.2)
+        task.cancel()
+        return await repl.run_code(None, "print(1)")  # type: ignore[arg-type]
+
+    assert asyncio.run(main()) == "[cell 2]\n1\n"
+    slow_cell, _ = repl.cells
+    assert slow_cell.stdout == "slow\n"
 
 
 def test_snapshot_is_restored_on_restart() -> None:
