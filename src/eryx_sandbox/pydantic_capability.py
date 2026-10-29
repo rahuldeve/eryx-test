@@ -51,9 +51,6 @@ a cell's code, and `repl_history(cell=N, output=True)` also what it printed."""
 # eryx runs user code from its own wrapper, which shows up as a traceback frame
 _WRAPPER_FRAME = re.compile(r'  File "<string>", line \d+, in _eryx_exec\n')
 _ECHO_VAR = "__eryx_repl_value"
-# Everything eryx raises: in eryx 0.11 its TimeoutError isn't an EryxError,
-# although the type stubs say it is
-_ERYX_ERRORS = (eryx.EryxError, eryx.TimeoutError)
 # A session that trapped (timeout, out of memory) fails every later call with this
 _WASM_TRAP = "WASM execution error"
 # Where a new session finds the pickled `variables`; the host directory behind it
@@ -328,12 +325,12 @@ class EryxRepl(AbstractCapability[Any]):
             session.execution_timeout_ms = self.execution_timeout_ms
             if self.snapshot is not None:
                 session.restore_state(self.snapshot)
-        except _ERYX_ERRORS as e:
+        except eryx.EryxError as e:
             raise RuntimeError(f"starting the EryxRepl session failed: {e}") from e
         if self._variables_pickle is not None:
             try:
                 session.execute(_LOAD_VARIABLES)
-            except _ERYX_ERRORS as e:
+            except eryx.EryxError as e:
                 raise RuntimeError(f"loading EryxRepl variables failed: {e}") from e
         return session
 

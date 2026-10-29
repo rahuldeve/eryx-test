@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Eryx sandbox with numpy, pandas and bokeh support"
 requires-python = ">=3.12"
 dependencies = [
-    "pyeryx>=0.11.0",
+    "pyeryx>=0.12.1",
     "numpy==2.4.6",
     "pandas==2.3.3",
     "pydantic-ai-slim[anthropic]>=2.63.0",

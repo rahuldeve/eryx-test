@@ -343,7 +343,7 @@ def test_bad_variables_fail_at_construction(
     ("options", "message"),
     [
         ({"variables": {"obj": HostOnly()}}, "loading EryxRepl variables failed"),
-        (  # eryx.TimeoutError isn't an ExecutionError (nor an EryxError)
+        (  # eryx.TimeoutError isn't an ExecutionError
             {"variables": {"x": list(range(1_000_000))}, "execution_timeout_ms": 1},
             "loading EryxRepl variables failed",
         ),
