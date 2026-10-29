@@ -1,7 +1,7 @@
 """Let a pydantic-ai agent analyse a host DataFrame through the eryx REPL capability.
 
-The weather frame from `run_dataframe_bokeh` is preloaded through the same preamble
-snapshot as `run_session_bokeh`, so the agent's first cell can use `df` directly.
+The weather frame from `run_dataframe_bokeh` is passed in as a preloaded variable,
+so the agent's first cell can use `df` directly.
 Two questions are asked as two `agent.run()` calls sharing one conversation and
 one eryx session. `ClearToolResults` is set to clear aggressively so that, by the
 second question, early cell outputs have been replaced with pointers to
@@ -15,7 +15,8 @@ import os
 from pydantic_ai import Agent, capture_run_messages
 from pydantic_ai.messages import ModelRequest, ToolReturnPart
 from pydantic_ai_harness.compaction import ClearToolResults
-from run_session_bokeh import LIMITS, make_snapshot
+from run_dataframe_bokeh import make_weather
+from run_session_bokeh import LIMITS
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory
 from eryx_sandbox.pydantic_capability import CLEARED_MARKER, EryxRepl
@@ -35,7 +36,7 @@ def main() -> None:
     factory = load_factory(
         "bokeh", BOKEH_PACKAGES, imports=["numpy", "pandas", "bokeh.plotting"]
     )
-    repl = EryxRepl(factory, snapshot=make_snapshot(factory), resource_limits=LIMITS)
+    repl = EryxRepl(factory, variables={"df": make_weather()}, resource_limits=LIMITS)
     agent = Agent(
         MODEL,
         instructions="Answer questions about the data by running code in the REPL.",

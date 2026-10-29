@@ -1,9 +1,9 @@
 """End to end: a DataFrame built on the host is plotted with bokeh in a sandbox.
 
-Runs the code from scripts/run_dataframe_bokeh.py: the frame reaches the
-sandbox as a pickle on a read-only volume (`eryx_sandbox.factory.shared_frames`), and the
-sandbox returns bokeh's `json_item` for the plot, which is checked against the
-original frame.
+Runs the code from scripts/run_dataframe_bokeh.py: the frame is preloaded as
+the sandbox global `df` through a pickle on a read-only volume (`run_with_variables`),
+and the sandbox returns bokeh's `json_item` for the plot, which is checked against
+the original frame.
 """
 
 import base64
@@ -13,9 +13,9 @@ import eryx
 import numpy as np
 import pandas as pd
 import pytest
-from run_dataframe_bokeh import CODE, make_weather
+from run_dataframe_bokeh import CODE, make_weather, run_with_variables
 
-from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, shared_frames
+from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory
 
 
 @pytest.fixture(scope="module")
@@ -60,12 +60,12 @@ def decode_column(value: object) -> np.ndarray:
 def test_bokeh_plot_from_host_dataframe(
     factory: eryx.SandboxFactory, weather: pd.DataFrame
 ) -> None:
-    with shared_frames({"weather": weather}) as volumes:
-        sandbox = factory.create_sandbox(
-            resource_limits=eryx.ResourceLimits(max_memory_bytes=512 * 1024 * 1024),
-            volumes=volumes,
-        )
-        item = sandbox.execute(CODE).result
+    item = run_with_variables(
+        factory,
+        CODE,
+        {"df": weather},
+        resource_limits=eryx.ResourceLimits(max_memory_bytes=512 * 1024 * 1024),
+    ).result
 
     assert item["target_id"] == "plot"
     assert item["version"].startswith("3.10.")

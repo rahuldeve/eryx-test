@@ -17,7 +17,7 @@ cell, e.g. `[output of cell 3 cleared: call repl_history(cell=3)]`. The pointer
 only goes into the request; the stored history keeps the marker, which is how
 `ClearToolResults` recognises results it has already cleared.
 
-    repl = EryxRepl(factory, snapshot=snapshot)
+    repl = EryxRepl(factory, variables={"df": df})
     agent = Agent(
         "anthropic:claude-sonnet-5-5",
         capabilities=[
@@ -29,10 +29,14 @@ only goes into the request; the stored history keeps the marker, which is how
 
 import ast
 import asyncio
+import keyword
+import pathlib
+import pickle
 import re
+import tempfile
 import time
 import weakref
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import KW_ONLY, dataclass, field, replace
 from typing import Any, Self
 
@@ -57,6 +61,18 @@ _WRAPPER_FRAME = re.compile(r'  File "<string>", line \d+, in _eryx_exec\n')
 _ECHO_VAR = "__eryx_repl_value"
 # A session that trapped (timeout, out of memory) fails every later call with this
 _WASM_TRAP = "WASM execution error"
+# Where a new session finds the pickled `variables`; the host directory behind it
+# is deleted once they are loaded
+_VARIABLES_MOUNT = "/eryx-variables"
+# A throwaway function keeps the loader's names out of the model's namespace
+_LOAD_VARIABLES = f"""
+def _eryx_load():
+    import pickle
+    with open("{_VARIABLES_MOUNT}/variables.pkl", "rb") as f:
+        return pickle.load(f)
+globals().update(_eryx_load())
+del _eryx_load
+"""
 
 
 @dataclass
@@ -118,7 +134,8 @@ class EryxRepl(AbstractCapability[Any]):
     """Capability giving the model a persistent, sandboxed Python REPL (see module docs).
 
     The eryx session is created on the first `run_code` call and kept, with the
-    cell history, until `reset()`. An instance belongs to the first agent it is
+    cell history, until `reset()`. Every new session (the first, and one after a
+    restart or `reset()`) restores `snapshot` and then defines `variables`. An instance belongs to the first agent it is
     given to; another agent gets a `ValueError`. It should also serve one
     conversation at a time, which isn't checked: concurrent runs of its agent
     share variables and history. Tool calls in one model response run one at a
@@ -138,6 +155,13 @@ class EryxRepl(AbstractCapability[Any]):
 
     snapshot: bytes | None = None
     """State from `Session.snapshot_state()` to restore when the session starts."""
+
+    variables: Mapping[str, Any] | None = None
+    """Host values to define as globals in every new session, after `snapshot`.
+
+    Pickled when the capability is created, so later changes on the host aren't
+    seen. Unpickling happens in the sandbox, so it needs the values' modules (e.g.
+    pandas from the factory) and can't load classes defined only on the host."""
 
     execution_timeout_ms: int | None = 60_000
     """Time limit for one cell; `None` removes it."""
@@ -161,8 +185,15 @@ class EryxRepl(AbstractCapability[Any]):
     _agent: weakref.ref[AbstractAgent[Any, Any]] | None = field(
         default=None, init=False, repr=False
     )
+    _variables_pickle: bytes | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.variables:
+            bad = [n for n in self.variables if not _is_name(n)]
+            if bad:
+                raise ValueError(f"variable names must be Python identifiers: {bad}")
+            # Pickled now so an unpicklable value fails here, not on the first call
+            self._variables_pickle = pickle.dumps(dict(self.variables))
         # Each call runs alone, in the order the model made them: the session can
         # only run one cell at a time, and later cells may use earlier ones' variables
         self._toolset = FunctionToolset[Any](
@@ -248,13 +279,20 @@ class EryxRepl(AbstractCapability[Any]):
         return replace(request_context, messages=messages)
 
     def _instructions(self, ctx: RunContext[Any]) -> str:
+        text = INSTRUCTIONS
+        if self.variables:
+            preloaded = ", ".join(
+                f"{name} ({type(value).__name__})"
+                for name, value in self.variables.items()
+            )
+            text += f"\n\nPreloaded variables: {preloaded}"
         if not self._cells:
-            return INSTRUCTIONS
+            return text
         shown = self._cells[-self.index_cells :]
         lines = [c.summary() for c in shown]
         if earlier := len(self._cells) - len(shown):
             lines.insert(0, f"({earlier} earlier cells, see repl_history)")
-        return INSTRUCTIONS + "\n\nCells run so far:\n" + "\n".join(lines)
+        return text + "\n\nCells run so far:\n" + "\n".join(lines)
 
     def _rewrite_cleared(self, message: ModelMessage) -> ModelMessage:
         if not isinstance(message, ModelRequest):
@@ -285,28 +323,46 @@ class EryxRepl(AbstractCapability[Any]):
 
     def _get_session(self) -> eryx.Session:
         if self._session is None:
-            options: dict[str, Any] = {
-                "on_stdout": self._stdout.append,
-                "on_stderr": self._stderr.append,
-            }
-            if self.volumes is not None:
-                options["volumes"] = list(self.volumes)
-            if self.factory is not None:
-                session = self.factory.create_session(
-                    resource_limits=self.resource_limits, **options
-                )
-            else:
-                session = eryx.Session(**options)
-            session.execution_timeout_ms = self.execution_timeout_ms
-            if self.snapshot is not None:
-                session.restore_state(self.snapshot)
-            self._session = session
+            # The variables' directory is only needed while the session loads them
+            with tempfile.TemporaryDirectory() as tmp:
+                volumes = list(self.volumes or [])
+                if self._variables_pickle is not None:
+                    pathlib.Path(tmp, "variables.pkl").write_bytes(
+                        self._variables_pickle
+                    )
+                    volumes.append((tmp, _VARIABLES_MOUNT, True))
+                self._session = self._create_session(volumes)
         return self._session
+
+    def _create_session(self, volumes: list[tuple[str, str, bool]]) -> eryx.Session:
+        options: dict[str, Any] = {
+            "on_stdout": self._stdout.append,
+            "on_stderr": self._stderr.append,
+        }
+        if volumes:
+            options["volumes"] = volumes
+        if self.factory is not None:
+            session = self.factory.create_session(
+                resource_limits=self.resource_limits, **options
+            )
+        else:
+            session = eryx.Session(**options)
+        session.execution_timeout_ms = self.execution_timeout_ms
+        if self.snapshot is not None:
+            session.restore_state(self.snapshot)
+        if self._variables_pickle is not None:
+            try:
+                session.execute(_LOAD_VARIABLES)
+            except eryx.ExecutionError as e:
+                # A host setup problem (e.g. a module missing in the sandbox), not
+                # something for the model to see as a cell error
+                raise RuntimeError(f"loading EryxRepl variables failed: {e}") from e
+        return session
 
     def _restart(self) -> str:
         """Drop a session eryx can't run again, e.g. after a timeout traps it."""
         self._session = None
-        return _restart_note(self.snapshot is not None)
+        return _restart_note(self.snapshot is not None or bool(self.variables))
 
     def _execute(self, code: str) -> Cell:
         """Run one cell, collecting output through the session's stream callbacks.
@@ -347,6 +403,10 @@ def _restart_note(snapshot: bool) -> str:
     return "; the sandbox was restarted and variables from earlier cells are gone" + (
         " (the preloaded state was restored)" if snapshot else ""
     )
+
+
+def _is_name(name: object) -> bool:
+    return isinstance(name, str) and name.isidentifier() and not keyword.iskeyword(name)
 
 
 def _exception_name(message: str) -> str:

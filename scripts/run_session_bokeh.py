@@ -1,7 +1,7 @@
 """Plot a host-built DataFrame with bokeh from a snapshotted eryx session.
 
-A preamble session loads the frame from its pickle on a read-only volume
-(`eryx_sandbox.factory.shared_frames`) and its state is saved with `snapshot_state()`.
+A preamble session preloads the frame as `df`, the same way as `run_dataframe_bokeh`
+(a pickle on a read-only volume), and its state is saved with `snapshot_state()`.
 A fresh session restores that snapshot, so the frame is already loaded and the
 volume is no longer needed, then runs code cell by cell, REPL style. The last
 cell returns bokeh's `json_item` for the plot, which the host embeds in an HTML
@@ -13,18 +13,19 @@ and never unpickles them.
 
 import json
 import pathlib
+import pickle
+import shutil
+import tempfile
 import time
 
 import eryx
-from run_dataframe_bokeh import PAGE, make_weather
+from run_dataframe_bokeh import LOAD_VARIABLES, PAGE, VARIABLES_MOUNT, make_weather
 
-from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out, shared_frames
+from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out
 from eryx_sandbox.pydantic_capability import prepare_cell
 
 PREAMBLE = """
 import pandas as pd
-
-df = pd.read_pickle("/host/weather.pkl")
 """
 
 CELLS = [
@@ -86,10 +87,22 @@ def run_cell(session: eryx.Session, code: str) -> eryx.ExecuteResult:
 
 
 def make_snapshot(factory: eryx.SandboxFactory) -> bytes:
-    """Run PREAMBLE in a session with the frame mounted and snapshot its state."""
-    with shared_frames({"weather": make_weather()}) as volumes:
-        session = factory.create_session(resource_limits=LIMITS, volumes=volumes)
-        session.execute(PREAMBLE)
+    """Run PREAMBLE in a session with the frame preloaded as `df`; snapshot its state.
+
+    The frame's pickle is mounted only while the session loads it; the directory is
+    removed here before the snapshot is taken.
+    """
+    tmp = tempfile.mkdtemp(prefix="eryx-variables-")
+    try:
+        pathlib.Path(tmp, "variables.pkl").write_bytes(
+            pickle.dumps({"df": make_weather()})
+        )
+        session = factory.create_session(
+            resource_limits=LIMITS, volumes=[(tmp, VARIABLES_MOUNT, True)]
+        )
+        session.execute(LOAD_VARIABLES + PREAMBLE)
+    finally:
+        shutil.rmtree(tmp)
     return session.snapshot_state()
 
 
@@ -114,10 +127,9 @@ def main() -> None:
     session.restore_state(snapshot_path.read_bytes())
     print(f"session restored in {(time.perf_counter() - start) * 1000:.1f}ms\n")
 
-    for code in CELLS:
-        result = run_cell(session, code)
+    results = [run_cell(session, code) for code in CELLS]
 
-    item = result.result
+    item = results[-1].result
     print("json_item keys:", sorted(item), "/ bokeh", item["version"])
     dest = OUT_DIR / "session-bokeh.html"
     dest.write_text(PAGE.format(version=item["version"], item=json.dumps(item)))

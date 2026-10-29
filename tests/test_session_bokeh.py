@@ -7,7 +7,7 @@ restores it and runs the cells, the last of which returns a bokeh `json_item`.
 
 import eryx
 import pytest
-from run_dataframe_bokeh import make_weather
+from run_dataframe_bokeh import VARIABLES_MOUNT, make_weather
 from run_session_bokeh import CELLS, LIMITS, make_snapshot
 from test_dataframe_bokeh import find_objects
 
@@ -36,13 +36,13 @@ def test_snapshot_restores_frame_without_volume(
     factory: eryx.SandboxFactory, snapshot: bytes
 ) -> None:
     session = restore(factory, snapshot)
-    result = session.execute("""
+    result = session.execute(f"""
 import os
-result = {
-    "mounted": os.path.exists("/host"),
-    "dtypes": {k: str(v) for k, v in df.dtypes.items()},
+result = {{
+    "mounted": os.path.exists("{VARIABLES_MOUNT}"),
+    "dtypes": {{k: str(v) for k, v in df.dtypes.items()}},
     "rows": len(df),
-}
+}}
 """).result
     assert result == {
         "mounted": False,
@@ -60,9 +60,8 @@ def test_cells_build_plot_from_restored_session(
     factory: eryx.SandboxFactory, snapshot: bytes
 ) -> None:
     session = restore(factory, snapshot)
-    for code in CELLS:
-        result = session.execute(code)
-    item = result.result
+    results = [session.execute(code) for code in CELLS]
+    item = results[-1].result
 
     assert item["version"].startswith("3.10.")
     (root,) = item["doc"]["roots"]

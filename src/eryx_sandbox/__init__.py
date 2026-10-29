@@ -1,7 +1,7 @@
 """numpy, pandas and bokeh in eryx sandboxes, and an eryx REPL for pydantic-ai.
 
 - `eryx_sandbox.factory`: cached sandbox factories with the WASI packages
-  installed, and host DataFrames shared into sandboxes.
+  installed.
 - `eryx_sandbox.pydantic_capability`: `EryxRepl`, a persistent eryx session
   as a pydantic-ai capability.
 """

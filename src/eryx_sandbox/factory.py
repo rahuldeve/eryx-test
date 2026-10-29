@@ -1,6 +1,5 @@
 """Build (or load cached) eryx sandbox factories with WASI packages."""
 
-import contextlib
 import gzip
 import hashlib
 import io
@@ -8,11 +7,8 @@ import os
 import pathlib
 import shutil
 import tarfile
-import tempfile
 import time
 import zipfile
-from collections.abc import Generator
-from typing import Any
 
 import eryx
 
@@ -127,20 +123,3 @@ def load_factory(
     # temporary extraction when garbage-collected, even while sandboxes created
     # from it are still in use.
     return eryx.SandboxFactory.load(str(cache), site_packages=str(site_packages))
-
-
-@contextlib.contextmanager
-def shared_frames(
-    frames: dict[str, Any], mount: str = "/host"
-) -> Generator[list[tuple[str, str, bool]]]:
-    """Pickle host DataFrames for a sandbox, yielding `create_sandbox` volumes.
-
-    Each frame is written to `<mount>/<name>.pkl` on a read-only mount, for
-    `pd.read_pickle` in the sandbox. The host's pandas and numpy must match the
-    sandbox's (pinned in pyproject.toml). Unpickling there is safe for the host;
-    never unpickle anything a sandbox wrote.
-    """
-    with tempfile.TemporaryDirectory() as tmp:
-        for name, df in frames.items():
-            df.to_pickle(pathlib.Path(tmp, f"{name}.pkl"))
-        yield [(tmp, mount, True)]

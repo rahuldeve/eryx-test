@@ -4,10 +4,13 @@ Uses a bare `eryx.Session` rather than a package factory, so these run in second
 """
 
 import gc
+import pickle
+from typing import Any
 
 import eryx
 import pytest
 from pydantic_ai import Agent
+from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -60,7 +63,9 @@ def repl() -> EryxRepl:
     return EryxRepl(execution_timeout_ms=2000)
 
 
-def make_agent(repl: EryxRepl, script: Script, *capabilities: object) -> Agent:
+def make_agent(
+    repl: EryxRepl, script: Script, *capabilities: AbstractCapability[Any]
+) -> Agent:
     return Agent(FunctionModel(script), capabilities=[*capabilities, repl])
 
 
@@ -225,6 +230,66 @@ def test_snapshot_is_restored_on_restart() -> None:
     assert first.stdout == after.stdout == "'yes'\n"
     assert timed_out.error is not None
     assert timed_out.error.endswith("(the preloaded state was restored)")
+
+
+class HostOnly:
+    """A class the sandbox can't import, so it can't unpickle instances of it."""
+
+
+def test_variables_are_preloaded() -> None:
+    repl = EryxRepl(variables={"x": 1, "data": {"a": [1, 2]}})
+    script = Script(
+        run_cells("x, data", "[n for n in ('_eryx_load', 'pickle') if n in globals()]")
+    )
+    make_agent(repl, script).run_sync("go")
+
+    values, leaked = repl.cells
+    assert values.stdout == "(1, {'a': [1, 2]})\n"
+    assert leaked.stdout == "[]\n"
+    _, info = script.requests[-1]
+    assert info.instructions is not None
+    assert "Preloaded variables: x (int), data (dict)" in info.instructions
+
+
+def test_variables_are_restored_on_restart() -> None:
+    repl = EryxRepl(variables={"x": 1}, execution_timeout_ms=1000)
+    script = Script(run_cells("x = 2", "while True: pass", "x"))
+    make_agent(repl, script).run_sync("go")
+
+    _, timed_out, after = repl.cells
+    assert timed_out.error is not None
+    assert timed_out.error.endswith("(the preloaded state was restored)")
+    assert after.stdout == "1\n"
+
+
+def test_variables_override_snapshot() -> None:
+    session = eryx.Session()
+    session.execute("x = 'old'\ny = 'kept'")
+    repl = EryxRepl(snapshot=session.snapshot_state(), variables={"x": "new"})
+    make_agent(repl, Script(run_cells("x, y"))).run_sync("go")
+
+    assert repl.cells[0].stdout == "('new', 'kept')\n"
+
+
+@pytest.mark.parametrize(
+    ("variables", "error"),
+    [
+        ({"not-a-name": 1}, ValueError),
+        ({"class": 1}, ValueError),
+        ({"f": lambda: 0}, (pickle.PicklingError, AttributeError)),
+    ],
+)
+def test_bad_variables_fail_at_construction(
+    variables: dict[str, object], error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        EryxRepl(variables=variables)
+
+
+def test_variables_the_sandbox_cannot_load() -> None:
+    repl = EryxRepl(variables={"obj": HostOnly()})
+    with pytest.raises(RuntimeError, match="loading EryxRepl variables failed"):
+        make_agent(repl, Script(run_cells("obj"))).run_sync("go")
 
 
 def test_reset(repl: EryxRepl) -> None:
