@@ -259,6 +259,19 @@ def test_default_id() -> None:
     assert EryxRepl(id="analysis").id == "analysis"
 
 
+@pytest.mark.parametrize(
+    ("limits", "error"),
+    [(None, None), (eryx.ResourceLimits(max_memory_bytes=64 << 20), "MemoryError")],
+)
+def test_resource_limits_without_factory(
+    limits: eryx.ResourceLimits | None, error: str | None
+) -> None:
+    # eryx's default (128 MB) allows 100 MB, so a MemoryError comes from `limits`
+    repl = EryxRepl(resource_limits=limits)
+    make_agent(repl, Script(run_cells("x = bytearray(100 << 20)"))).run_sync("go")
+    assert repl.cells[0].error == error
+
+
 def test_timeout_restarts_session(repl: EryxRepl) -> None:
     script = Script(run_cells("x = 1", "while True: pass", "x", "y = 2\ny"))
     make_agent(repl, script).run_sync("go")

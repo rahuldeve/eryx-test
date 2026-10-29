@@ -142,7 +142,8 @@ class EryxRepl(AbstractCapability[Any]):
     _: KW_ONLY
 
     resource_limits: eryx.ResourceLimits | None = None
-    """Passed to `factory.create_session` (needs `factory`)."""
+    """Limits for the session; `None` uses eryx's defaults (128 MB of memory).
+    Their `execution_timeout_ms` is replaced by this capability's own."""
 
     volumes: Sequence[tuple[str, str, bool]] | None = None
     """Host directories to mount, as `(host_path, sandbox_path, read_only)`."""
@@ -307,6 +308,7 @@ class EryxRepl(AbstractCapability[Any]):
 
     def _create_session(self, volumes: list[tuple[str, str, bool]]) -> eryx.Session:
         options: dict[str, Any] = {
+            "resource_limits": self.resource_limits,
             "on_stdout": self._stdout.append,
             "on_stderr": self._stderr.append,
         }
@@ -317,9 +319,7 @@ class EryxRepl(AbstractCapability[Any]):
         # model to see as a cell error
         try:
             if self.factory is not None:
-                session = self.factory.create_session(
-                    resource_limits=self.resource_limits, **options
-                )
+                session = self.factory.create_session(**options)
             else:
                 session = eryx.Session(**options)
             session.execution_timeout_ms = self.execution_timeout_ms
