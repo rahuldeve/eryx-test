@@ -113,6 +113,8 @@ def test_output_and_errors(repl: EryxRepl) -> None:
         ("print('p')", "p\n"),  # its None result isn't echoed
         ("x = 1; x", "1\n"),  # last expression shares a line
         ("s = 'é'; s  # comment", "'é'\n"),  # col offsets are in bytes
+        ("\x0c\nx = 1\nx", "1\n"),  # form feed isn't a line break to ast
+        ("s = 'a\u2028b'\nx = 2\nx", "2\n"),  # nor is U+2028 in a string
     ],
 )
 def test_last_expression_is_echoed(repl: EryxRepl, code: str, printed: str) -> None:

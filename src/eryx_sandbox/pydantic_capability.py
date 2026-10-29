@@ -108,7 +108,8 @@ def prepare_cell(code: str) -> str:
     if not tree.body or not isinstance(tree.body[-1], ast.Expr):
         return code
     last = tree.body[-1]
-    lines = code.splitlines()
+    # only the line breaks ast counts: str.splitlines() also splits on \x0c, \u2028...
+    lines = re.split(r"\r\n|\r|\n", code)
     start, end = last.lineno - 1, last.end_lineno or last.lineno
     # what precedes the expression on its line, e.g. `x = 1; ` (offsets are in bytes)
     head = lines[start].encode()[: last.col_offset].decode()
