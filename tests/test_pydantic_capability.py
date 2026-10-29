@@ -322,10 +322,22 @@ def test_bad_variables_fail_at_construction(
         EryxRepl(variables=variables)
 
 
-def test_variables_the_sandbox_cannot_load() -> None:
-    repl = EryxRepl(variables={"obj": HostOnly()})
-    with pytest.raises(RuntimeError, match="loading EryxRepl variables failed"):
-        make_agent(repl, Script(run_cells("obj"))).run_sync("go")
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"variables": {"obj": HostOnly()}}, "loading EryxRepl variables failed"),
+        (  # eryx.TimeoutError isn't an ExecutionError (nor an EryxError)
+            {"variables": {"x": list(range(1_000_000))}, "execution_timeout_ms": 1},
+            "loading EryxRepl variables failed",
+        ),
+        ({"snapshot": b"garbage"}, "starting the EryxRepl session failed"),
+    ],
+)
+def test_session_that_cannot_start(options: dict[str, Any], message: str) -> None:
+    repl = EryxRepl(**options)
+    with pytest.raises(RuntimeError, match=message):
+        make_agent(repl, Script(run_cells("1"))).run_sync("go")
+    assert repl.cells == []
 
 
 def test_reset(repl: EryxRepl) -> None:

@@ -51,6 +51,9 @@ a cell's code, and `repl_history(cell=N, output=True)` also what it printed."""
 # eryx runs user code from its own wrapper, which shows up as a traceback frame
 _WRAPPER_FRAME = re.compile(r'  File "<string>", line \d+, in _eryx_exec\n')
 _ECHO_VAR = "__eryx_repl_value"
+# Everything eryx raises: in eryx 0.11 its TimeoutError isn't an EryxError,
+# although the type stubs say it is
+_ERYX_ERRORS = (eryx.EryxError, eryx.TimeoutError)
 # A session that trapped (timeout, out of memory) fails every later call with this
 _WASM_TRAP = "WASM execution error"
 # Where a new session finds the pickled `variables`; the host directory behind it
@@ -128,7 +131,8 @@ class EryxRepl(AbstractCapability[Any]):
 
     The eryx session is created on the first `run_code` call and kept, with the
     cell history, until `reset()`. Every new session (the first, and one after a
-    restart or `reset()`) restores `snapshot` and then defines `variables`. An
+    restart or `reset()`) restores `snapshot` and then defines `variables`; if
+    that fails, `run_code` raises `RuntimeError`, which ends the run. An
     instance belongs to the first agent it is given to; another agent gets a `ValueError`. It should also serve one
     conversation at a time, which isn't checked: concurrent runs of its agent
     share variables and history. Tool calls in one model response run one at a
@@ -307,21 +311,25 @@ class EryxRepl(AbstractCapability[Any]):
         }
         if volumes:
             options["volumes"] = volumes
-        if self.factory is not None:
-            session = self.factory.create_session(
-                resource_limits=self.resource_limits, **options
-            )
-        else:
-            session = eryx.Session(**options)
-        session.execution_timeout_ms = self.execution_timeout_ms
-        if self.snapshot is not None:
-            session.restore_state(self.snapshot)
+        # Failures here are host setup problems (a bad snapshot, a module missing in
+        # the sandbox, variables too big for the limits), not something for the
+        # model to see as a cell error
+        try:
+            if self.factory is not None:
+                session = self.factory.create_session(
+                    resource_limits=self.resource_limits, **options
+                )
+            else:
+                session = eryx.Session(**options)
+            session.execution_timeout_ms = self.execution_timeout_ms
+            if self.snapshot is not None:
+                session.restore_state(self.snapshot)
+        except _ERYX_ERRORS as e:
+            raise RuntimeError(f"starting the EryxRepl session failed: {e}") from e
         if self._variables_pickle is not None:
             try:
                 session.execute(_LOAD_VARIABLES)
-            except eryx.ExecutionError as e:
-                # A host setup problem (e.g. a module missing in the sandbox), not
-                # something for the model to see as a cell error
+            except _ERYX_ERRORS as e:
                 raise RuntimeError(f"loading EryxRepl variables failed: {e}") from e
         return session
 
