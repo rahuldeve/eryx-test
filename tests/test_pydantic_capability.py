@@ -150,6 +150,23 @@ def test_instructions_index_cells(repl: EryxRepl) -> None:
     )
 
 
+def test_instructions_index_no_cells() -> None:
+    repl = EryxRepl(index_cells=0)
+    script = Script(run_cells("x = 1", "x"))
+    make_agent(repl, script).run_sync("go")
+
+    _, info = script.requests[-1]
+    assert info.instructions is not None
+    assert info.instructions.endswith(
+        "Cells run so far:\n(2 earlier cells, see repl_history)"
+    )
+
+
+def test_negative_index_cells() -> None:
+    with pytest.raises(ValueError, match="index_cells"):
+        EryxRepl(index_cells=-1)
+
+
 def test_long_output_is_clipped_but_kept(repl: EryxRepl) -> None:
     repl.max_output_chars = 100
     script = Script(

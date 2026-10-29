@@ -167,7 +167,8 @@ class EryxRepl(AbstractCapability[Any]):
     """Longer cell output is clipped in the `run_code` return; history keeps it all."""
 
     index_cells: int = 50
-    """Most recent cells listed in the instructions."""
+    """Most recent cells listed in the instructions; `0` lists none, only how many
+    there are."""
 
     on_change: InstructionChangePolicy = "rewrite"
     """How changes to the instructions (the cell index) reach the model.
@@ -190,6 +191,8 @@ class EryxRepl(AbstractCapability[Any]):
         # Appended instruction changes are addressed by the capability's id
         if self.id is None:
             self.id = "eryx_repl"
+        if self.index_cells < 0:
+            raise ValueError(f"index_cells must be >= 0, got {self.index_cells}")
         if self.variables:
             bad = [n for n in self.variables if not _is_name(n)]
             if bad:
@@ -285,7 +288,8 @@ class EryxRepl(AbstractCapability[Any]):
             text += f"\n\nPreloaded variables: {preloaded}"
         if not self._cells:
             return text
-        shown = self._cells[-self.index_cells :]
+        # -0 would slice from the start and list every cell
+        shown = self._cells[-self.index_cells :] if self.index_cells else []
         lines = [c.summary() for c in shown]
         if earlier := len(self._cells) - len(shown):
             lines.insert(0, f"({earlier} earlier cells, see repl_history)")
