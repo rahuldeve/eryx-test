@@ -4,8 +4,10 @@ The weather frame from `run_dataframe_bokeh` is passed in as a preloaded variabl
 so the agent's first cell can use `df` directly.
 Two questions are asked as two `agent.run()` calls sharing one conversation and
 one eryx session. `ClearToolResults` is set to clear aggressively so that, by the
-second question, early cell outputs have been replaced with pointers to
-`repl_history`.
+second question, early cell outputs are gone from the conversation; the model can
+still find them through the cell index in the instructions and `repl_history`.
+Instruction changes are appended (`on_change="append"`), so the prompt cache
+survives each new cell.
 
 Needs ANTHROPIC_API_KEY (or set AGENT_MODEL to another pydantic-ai model).
 """
@@ -19,9 +21,10 @@ from run_dataframe_bokeh import make_weather
 from run_session_bokeh import LIMITS
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory
-from eryx_sandbox.pydantic_capability import CLEARED_MARKER, EryxRepl
+from eryx_sandbox.pydantic_capability import EryxRepl
 
 MODEL = os.environ.get("AGENT_MODEL", "anthropic:claude-sonnet-5-5")
+CLEARED = "[tool result cleared]"  # ClearToolResults' default placeholder
 
 QUESTIONS = [
     (
@@ -36,15 +39,16 @@ def main() -> None:
     factory = load_factory(
         "bokeh", BOKEH_PACKAGES, imports=["numpy", "pandas", "bokeh.plotting"]
     )
-    repl = EryxRepl(factory, variables={"df": make_weather()}, resource_limits=LIMITS)
+    repl = EryxRepl(
+        factory,
+        variables={"df": make_weather()},
+        resource_limits=LIMITS,
+        on_change="append",
+    )
     agent = Agent(
         MODEL,
         instructions="Answer questions about the data by running code in the REPL.",
-        capabilities=[
-            # Must come before EryxRepl, which rewrites the markers it leaves
-            ClearToolResults(max_messages=6, keep_pairs=2, placeholder=CLEARED_MARKER),
-            repl,
-        ],
+        capabilities=[ClearToolResults(max_messages=6, keep_pairs=2), repl],
     )
 
     history = None
@@ -59,9 +63,14 @@ def main() -> None:
             for message in messages
             if isinstance(message, ModelRequest)
             for part in message.parts
-            if isinstance(part, ToolReturnPart) and part.content == CLEARED_MARKER
+            if isinstance(part, ToolReturnPart) and part.content == CLEARED
         ]
         print(f"[{len(cleared)} REPL results cleared so far]")
+        usage = result.usage
+        print(
+            f"[tokens: {usage.input_tokens} input, "
+            f"{usage.cache_read_tokens} read from cache]"
+        )
 
     print("\n### Cells run")
     for cell in repl.cells:

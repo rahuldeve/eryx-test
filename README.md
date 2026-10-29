@@ -61,22 +61,31 @@ from the cache in `packages/` (set `ERYX_PACKAGES_DIR` to use another directory)
 
 `eryx_sandbox.pydantic_capability.EryxRepl` turns a persistent eryx session
 into a REPL for a [pydantic-ai](https://pydantic.dev/docs/ai/) agent. `run_code` returns each
-cell's stdout/stderr, and `repl_history` returns the code and output of earlier
-cells. The instructions list every cell run so far. Old results cleared by
-pydantic-ai-harness's `ClearToolResults` are replaced with a pointer such as
-`[output of cell 3 cleared: call repl_history(cell=3)]`, as long as
-`ClearToolResults` uses `CLEARED_MARKER` and comes first:
+cell's stdout/stderr. `repl_history` returns the code of earlier cells, plus their
+output with `output=True`. The instructions list every cell run so far, built from
+the capability's own record rather than the conversation, so whatever a
+pydantic-ai-harness compaction strategy does to old tool results (`ClearToolResults`
+blanks them, `SlidingWindowCompaction` drops them, `SummarizingCompaction`
+summarises them), the model can still see what it ran and fetch it again.
+Compaction capabilities can go in any order relative to `EryxRepl`:
 
 ```python
-from eryx_sandbox.pydantic_capability import CLEARED_MARKER, EryxRepl
+from eryx_sandbox.pydantic_capability import EryxRepl
 from pydantic_ai_harness.compaction import ClearToolResults
 
-repl = EryxRepl(factory, variables={"df": df})
+repl = EryxRepl(factory, variables={"df": df}, on_change="append")
 agent = Agent(
     "anthropic:claude-sonnet-5-5",
-    capabilities=[ClearToolResults(max_tokens=50_000, placeholder=CLEARED_MARKER), repl],
+    capabilities=[ClearToolResults(max_tokens=50_000), repl],
 )
 ```
+
+`on_change` is pydantic-ai's instruction change policy. With the default
+`"rewrite"`, the instructions are resent in the prompt prefix on each request, so
+every new cell changes the prefix and invalidates the prompt cache. With
+`"append"`, the prefix stays fixed and each change to the cell index is added to
+the conversation (as a diff where that is shorter); the full index is resent after
+compaction.
 
 The session and its history last as long as the `EryxRepl` instance, across
 `agent.run()` calls. An instance can only be used by one agent, and should
@@ -85,6 +94,7 @@ runs out of memory breaks the eryx session for good. The capability then starts
 a new session and tells the model that its variables are gone. Every new session
 restores `snapshot` and then defines `variables`, if given: `variables` are host
 values pickled when the capability is created and loaded through a temporary
-mount that is removed once the session has them. `uv run poe agent` runs a demo (needs `ANTHROPIC_API_KEY`).
+mount that is removed once the session has them. `uv run poe agent` runs a demo
+(needs `ANTHROPIC_API_KEY`).
 
 All codebase inside this repo was authored by Claude

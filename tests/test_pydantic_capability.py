@@ -5,6 +5,7 @@ Uses a bare `eryx.Session` rather than a package factory, so these run in second
 
 import gc
 import pickle
+import warnings
 from typing import Any
 
 import eryx
@@ -18,11 +19,12 @@ from pydantic_ai.messages import (
     TextPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.compaction import ClearToolResults
 
-from eryx_sandbox.pydantic_capability import CLEARED_MARKER, EryxRepl, prepare_cell
+from eryx_sandbox.pydantic_capability import EryxRepl, prepare_cell
 
 Call = tuple[str, dict[str, object]]
 
@@ -148,11 +150,18 @@ def test_instructions_index_cells(repl: EryxRepl) -> None:
 
 def test_long_output_is_clipped_but_kept(repl: EryxRepl) -> None:
     repl.max_output_chars = 100
-    script = Script([*run_cells("print('x' * 500)"), ("repl_history", {"cell": 1})])
+    script = Script(
+        [
+            *run_cells("print('x' * 500)"),
+            ("repl_history", {"cell": 1, "output": True}),
+        ]
+    )
     result = make_agent(repl, script).run_sync("go")
 
     clipped, history = tool_returns(result.all_messages())
-    assert clipped.endswith("... 401 more characters, see repl_history(cell=1)\n")
+    assert clipped.endswith(
+        "... 401 more characters, see repl_history(cell=1, output=True)\n"
+    )
     assert "x" * 500 + "\n" in history
 
 
@@ -161,49 +170,74 @@ def test_history(repl: EryxRepl) -> None:
         [
             *run_cells("print(1)", "1/0", "print(3)"),
             ("repl_history", {"cell": 2}),
+            ("repl_history", {"cell": 2, "output": True}),
             ("repl_history", {"last": 2}),
+            ("repl_history", {"last": 2, "output": True}),
             ("repl_history", {"cell": 9}),
         ]
     )
     result = make_agent(repl, script).run_sync("go")
 
-    one, last_two, missing = tool_returns(result.all_messages())[3:]
-    assert one.startswith("[cell 2, ZeroDivisionError]\n>>> code\n1/0\n>>> output\n")
-    assert last_two.startswith("[cell 2, ZeroDivisionError]")
-    assert "\n\n[cell 3]\n>>> code\nprint(3)\n>>> output\n3\n" in last_two
+    code, with_output, last_two, last_two_output, missing = tool_returns(
+        result.all_messages()
+    )[3:]
+    assert code == "[cell 2, ZeroDivisionError]\n>>> code\n1/0\n"
+    assert with_output.startswith(
+        "[cell 2, ZeroDivisionError]\n>>> code\n1/0\n>>> output\n"
+    )
+    assert "ZeroDivisionError: division by zero" in with_output
+    assert last_two == (
+        "[cell 2, ZeroDivisionError]\n>>> code\n1/0\n\n\n[cell 3]\n>>> code\nprint(3)\n"
+    )
+    assert last_two_output.endswith("\n\n[cell 3]\n>>> code\nprint(3)\n>>> output\n3\n")
     assert missing == "No cell 9: cells run so far are 1-3."
 
 
-def test_cleared_results_point_to_history(repl: EryxRepl) -> None:
+@pytest.mark.parametrize("clear_first", [True, False])
+def test_clearing_in_any_order(repl: EryxRepl, clear_first: bool) -> None:
     script = Script(
         [
             *run_cells("print('one')", "print('two')", "print('three')"),
-            ("repl_history", {"cell": 1}),
-            *run_cells("print('four')", "print('five')"),
+            ("repl_history", {"cell": 1, "output": True}),
         ]
     )
-    clear = ClearToolResults(max_messages=2, keep_pairs=1, placeholder=CLEARED_MARKER)
-    result = make_agent(repl, script, clear).run_sync("go")
+    clear = ClearToolResults(max_messages=2, keep_pairs=1)
+    capabilities = [clear, repl] if clear_first else [repl, clear]
+    Agent(FunctionModel(script), capabilities=capabilities).run_sync("go")
 
     seen = list(script.returns.values())
-    assert seen[:4] == [
-        "[output of cell 1 cleared: call repl_history(cell=1)]",
-        "[output of cell 2 cleared: call repl_history(cell=2)]",
-        "[output of cell 3 cleared: call repl_history(cell=3)]",
-        # a cleared repl_history result points at the cells it showed
-        "[output of cell 1 cleared: call repl_history(cell=1)]",
-    ]
-    assert seen[-1] == "[cell 5]\nfive\n"
-    # stored history keeps the marker, so ClearToolResults still recognises its clears
-    assert tool_returns(result.all_messages())[0] == CLEARED_MARKER
+    assert seen[:3] == ["[tool result cleared]"] * 3
+    assert seen[-1] == "[cell 1]\n>>> code\nprint('one')\n>>> output\none\n"
+    _, info = script.requests[-1]
+    assert info.instructions is not None
+    assert "Cells run so far:\n1 ok: print('one')" in info.instructions
 
-    # the history call made after cell 1 was cleared got cell 1's full output
-    histories = [
-        r
-        for r in tool_returns(script.requests[4][0])
-        if r.startswith("[cell 1]\n>>> code")
+
+def test_append_instructions() -> None:
+    repl = EryxRepl(on_change="append")
+    script = Script(run_cells("x = 1", "y = 2"))
+    with warnings.catch_warnings():
+        warnings.filterwarnings("error", message="Instruction block")
+        make_agent(repl, script).run_sync("go")
+
+    messages, info = script.requests[-1]
+    # the prompt prefix keeps the index as it was when the run started
+    assert info.instructions is not None
+    assert "Cells run so far" not in info.instructions
+    updates = [
+        str(part.content)
+        for m in messages
+        if isinstance(m, ModelRequest)
+        for part in m.parts
+        if isinstance(part, UserPromptPart) and "eryx_repl" in str(part.content)
     ]
-    assert histories == ["[cell 1]\n>>> code\nprint('one')\n>>> output\none\n"]
+    assert "1 ok: x = 1" in updates[0]
+    assert "<context_diff" in updates[-1] and "+2 ok: y = 2" in updates[-1]
+
+
+def test_default_id() -> None:
+    assert EryxRepl().id == "eryx_repl"
+    assert EryxRepl(id="analysis").id == "analysis"
 
 
 def test_timeout_restarts_session(repl: EryxRepl) -> None:
@@ -301,7 +335,10 @@ def test_reset(repl: EryxRepl) -> None:
 
 
 def test_parallel_calls_run_in_order(repl: EryxRepl) -> None:
-    calls = [*run_cells("x = 1", "x += 1", "x"), ("repl_history", {"last": 3})]
+    calls = [
+        *run_cells("x = 1", "x += 1", "x"),
+        ("repl_history", {"last": 3, "output": True}),
+    ]
     responses = [
         ModelResponse(parts=[ToolCallPart(name, args) for name, args in calls]),
         ModelResponse(parts=[TextPart("done")]),

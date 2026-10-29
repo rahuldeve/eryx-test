@@ -6,24 +6,18 @@
   so variables carry over between calls and across `agent.run()` calls. It returns
   the cell's stdout and stderr (a traceback if the code raised), and echoes the
   value of a bare last expression, as a REPL would.
-- `repl_history` returns the code and full output of earlier cells.
+- `repl_history` returns the code of earlier cells, and their output on request.
 
-Every cell is kept on the host, and the instructions carry a short index of them,
-so the model can see what it ran even after compaction blanks old tool results.
-For pydantic-ai-harness's `ClearToolResults`, pass `CLEARED_MARKER` as its
-`placeholder` and list it *before* `EryxRepl`: just before each model request
-`EryxRepl` replaces the marker on its own tools' results with a pointer to the
-cell, e.g. `[output of cell 3 cleared: call repl_history(cell=3)]`. The pointer
-only goes into the request; the stored history keeps the marker, which is how
-`ClearToolResults` recognises results it has already cleared.
+Every cell is kept on the host, and the instructions carry an index of them built
+from that record rather than from the conversation. So whatever a compaction
+strategy does to old tool calls and results (clears, summarises or drops them),
+the model can still see what it ran and fetch it again with `repl_history`.
+Compaction capabilities can be listed in any order relative to `EryxRepl`.
 
-    repl = EryxRepl(factory, variables={"df": df})
+    repl = EryxRepl(factory, variables={"df": df}, on_change="append")
     agent = Agent(
         "anthropic:claude-sonnet-5-5",
-        capabilities=[
-            ClearToolResults(max_tokens=50_000, placeholder=CLEARED_MARKER),
-            repl,
-        ],
+        capabilities=[ClearToolResults(max_tokens=50_000), repl],
     )
 """
 
@@ -37,24 +31,22 @@ import tempfile
 import time
 import weakref
 from collections.abc import Mapping, Sequence
-from dataclasses import KW_ONLY, dataclass, field, replace
+from dataclasses import KW_ONLY, dataclass, field
 from typing import Any, Self
 
 import eryx
 from pydantic_ai import FunctionToolset, RunContext
 from pydantic_ai.agent import AbstractAgent
 from pydantic_ai.capabilities import AbstractCapability
-from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
-from pydantic_ai.models import ModelRequestContext
-
-CLEARED_MARKER = "[eryx-repl: tool result cleared]"
+from pydantic_ai.messages import InstructionChangePolicy, InstructionPart
 
 INSTRUCTIONS = """\
 You have a persistent, sandboxed Python REPL. Run code with `run_code`: \
 variables, imports and functions carry over between calls. Each call returns the \
 cell's stdout and stderr, and the value of a bare last expression is printed. \
-Use `repl_history` to see the code and full output of earlier cells, for example \
-when an old tool result has been cleared."""
+Earlier calls and their results may be cleared, summarised or dropped from this \
+conversation, but the list of cells below is complete: `repl_history(cell=N)` shows \
+a cell's code, and `repl_history(cell=N, output=True)` also what it printed."""
 
 # eryx runs user code from its own wrapper, which shows up as a traceback frame
 _WRAPPER_FRAME = re.compile(r'  File "<string>", line \d+, in _eryx_exec\n')
@@ -135,8 +127,8 @@ class EryxRepl(AbstractCapability[Any]):
 
     The eryx session is created on the first `run_code` call and kept, with the
     cell history, until `reset()`. Every new session (the first, and one after a
-    restart or `reset()`) restores `snapshot` and then defines `variables`. An instance belongs to the first agent it is
-    given to; another agent gets a `ValueError`. It should also serve one
+    restart or `reset()`) restores `snapshot` and then defines `variables`. An
+    instance belongs to the first agent it is given to; another agent gets a `ValueError`. It should also serve one
     conversation at a time, which isn't checked: concurrent runs of its agent
     share variables and history. Tool calls in one model response run one at a
     time, in order.
@@ -172,14 +164,16 @@ class EryxRepl(AbstractCapability[Any]):
     index_cells: int = 50
     """Most recent cells listed in the instructions."""
 
-    cleared_marker: str = CLEARED_MARKER
-    """The `placeholder` given to `ClearToolResults`."""
+    on_change: InstructionChangePolicy = "rewrite"
+    """How changes to the instructions (the cell index) reach the model.
+
+    `'rewrite'` resends them in the prompt prefix on each request. `'append'` keeps
+    the prefix and adds each change to history (as a diff where shorter), so the
+    prompt cache survives new cells; the full text is resent after compaction. See
+    pydantic-ai's `InstructionPart.on_change`."""
 
     _session: eryx.Session | None = field(default=None, init=False, repr=False)
     _cells: list[Cell] = field(default_factory=list, init=False, repr=False)
-    _call_cells: dict[str, list[int]] = field(
-        default_factory=dict, init=False, repr=False
-    )
     _stdout: list[bytes] = field(default_factory=list, init=False, repr=False)
     _stderr: list[bytes] = field(default_factory=list, init=False, repr=False)
     _agent: weakref.ref[AbstractAgent[Any, Any]] | None = field(
@@ -188,6 +182,9 @@ class EryxRepl(AbstractCapability[Any]):
     _variables_pickle: bytes | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        # Appended instruction changes are addressed by the capability's id
+        if self.id is None:
+            self.id = "eryx_repl"
         if self.variables:
             bad = [n for n in self.variables if not _is_name(n)]
             if bad:
@@ -219,7 +216,6 @@ class EryxRepl(AbstractCapability[Any]):
         """Drop the session and the cell history; the next cell starts fresh."""
         self._session = None
         self._cells.clear()
-        self._call_cells.clear()
 
     def get_toolset(self) -> FunctionToolset[Any]:
         return self._toolset
@@ -235,25 +231,28 @@ class EryxRepl(AbstractCapability[Any]):
                 calls; a bare last expression is printed, as in a REPL.
         """
         cell = await asyncio.to_thread(self._execute, code)
-        if ctx.tool_call_id:
-            self._call_cells[ctx.tool_call_id] = [cell.number]
         output = cell.output() or "(no output)\n"
         if len(output) > self.max_output_chars:
             output = (
                 output[: self.max_output_chars]
                 + f"\n... {len(output) - self.max_output_chars} more characters, "
-                f"see repl_history(cell={cell.number})\n"
+                f"see repl_history(cell={cell.number}, output=True)\n"
             )
         return f"[cell {cell.number}]\n{output}"
 
     async def repl_history(
-        self, ctx: RunContext[Any], cell: int | None = None, last: int = 5
+        self,
+        ctx: RunContext[Any],
+        cell: int | None = None,
+        last: int = 5,
+        output: bool = False,
     ) -> str:
-        """Show the code and full output of earlier REPL cells.
+        """Show the code of earlier REPL cells, and optionally their full output.
 
         Args:
             cell: The cell number to show. Omit it to show the most recent cells.
             last: How many of the most recent cells to show when `cell` is omitted.
+            output: Also show each cell's full output (stdout, stderr and error).
         """
         if cell is not None:
             if not 1 <= cell <= len(self._cells):
@@ -263,22 +262,15 @@ class EryxRepl(AbstractCapability[Any]):
             shown = self._cells[-max(last, 1) :]
         if not shown:
             return "No cells have been run yet."
-        if ctx.tool_call_id:
-            self._call_cells[ctx.tool_call_id] = [c.number for c in shown]
-        return "\n\n".join(
-            f"[cell {c.number}{f', {c.error}' if c.error else ''}]\n"
-            f">>> code\n{c.code.rstrip()}\n>>> output\n{c.output() or '(no output)'}"
-            for c in shown
-        )
+        return "\n\n".join(_render_cell(c, output) for c in shown)
 
-    async def before_model_request(
-        self, ctx: RunContext[Any], request_context: ModelRequestContext
-    ) -> ModelRequestContext:
-        """Point cleared results of this capability's tools at `repl_history`."""
-        messages = [self._rewrite_cleared(m) for m in request_context.messages]
-        return replace(request_context, messages=messages)
+    def _instructions(self, ctx: RunContext[Any]) -> str | InstructionPart:
+        text = self._instructions_text()
+        if self.on_change == "append":
+            return InstructionPart(text, name="repl", on_change="append")
+        return text
 
-    def _instructions(self, ctx: RunContext[Any]) -> str:
+    def _instructions_text(self) -> str:
         text = INSTRUCTIONS
         if self.variables:
             preloaded = ", ".join(
@@ -293,33 +285,6 @@ class EryxRepl(AbstractCapability[Any]):
         if earlier := len(self._cells) - len(shown):
             lines.insert(0, f"({earlier} earlier cells, see repl_history)")
         return text + "\n\nCells run so far:\n" + "\n".join(lines)
-
-    def _rewrite_cleared(self, message: ModelMessage) -> ModelMessage:
-        if not isinstance(message, ModelRequest):
-            return message
-        parts = [
-            replace(part, content=self._cleared_pointer(part))
-            if isinstance(part, ToolReturnPart)
-            and part.tool_name in self._toolset.tools
-            and part.content == self.cleared_marker
-            else part
-            for part in message.parts
-        ]
-        if all(new is old for new, old in zip(parts, message.parts)):
-            return message
-        return replace(message, parts=parts)
-
-    def _cleared_pointer(self, part: ToolReturnPart) -> str:
-        numbers = self._call_cells.get(part.tool_call_id)
-        if not numbers:  # e.g. history from before this capability was created
-            return "[output cleared: call repl_history to see earlier cells]"
-        if len(numbers) == 1:
-            return (
-                f"[output of cell {numbers[0]} cleared: "
-                f"call repl_history(cell={numbers[0]})]"
-            )
-        cells = ", ".join(map(str, numbers))
-        return f"[output of cells {cells} cleared: call repl_history(cell=N) for each]"
 
     def _get_session(self) -> eryx.Session:
         if self._session is None:
@@ -397,6 +362,16 @@ class EryxRepl(AbstractCapability[Any]):
         )
         self._cells.append(cell)
         return cell
+
+
+def _render_cell(cell: Cell, output: bool) -> str:
+    text = (
+        f"[cell {cell.number}{f', {cell.error}' if cell.error else ''}]\n"
+        f">>> code\n{cell.code.rstrip()}\n"
+    )
+    if output:
+        text += f">>> output\n{cell.output() or '(no output)'}"
+    return text
 
 
 def _restart_note(snapshot: bool) -> str:
