@@ -1,16 +1,13 @@
 """Plot a host-built DataFrame with bokeh inside an eryx sandbox.
 
 The frame is preloaded as the sandbox global `df`: the host pickles it into a
-temporary directory mounted read-only, and a short preamble unpickles it before
-the plotting code runs (`run_with_variables`). The sandbox returns bokeh's
+temporary directory mounted read-only, and `LOAD_VARIABLES` unpickles it before
+the plotting code runs (`run_with_variables`, see `eryx_sandbox.variables`). The sandbox returns bokeh's
 `json_item` for the plot, which the host embeds in an HTML page with BokehJS.
 """
 
 import json
 import pathlib
-import pickle
-import shutil
-import tempfile
 import time
 from typing import Any
 
@@ -19,19 +16,7 @@ import numpy as np
 import pandas as pd
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out
-
-# Where the sandbox finds the pickled variables
-VARIABLES_MOUNT = "/eryx-variables"
-# Prepended to the code: a throwaway function keeps the loader's names out of the
-# sandbox's globals
-LOAD_VARIABLES = f"""
-def _eryx_load():
-    import pickle
-    with open("{VARIABLES_MOUNT}/variables.pkl", "rb") as f:
-        return pickle.load(f)
-globals().update(_eryx_load())
-del _eryx_load
-"""
+from eryx_sandbox.variables import LOAD_VARIABLES, mounted_variables
 
 CODE = """
 import pandas as pd
@@ -89,23 +74,16 @@ def run_with_variables(
 ) -> eryx.ExecuteResult:
     """Run `code` in a new sandbox with `variables` defined as its globals.
 
-    The variables are pickled into a temporary directory, mounted read-only at
-    VARIABLES_MOUNT for the run and removed here afterwards, whether the code
-    succeeded or not. Unpickling in the sandbox is safe for the host, and needs the
-    sandbox's pandas and numpy to match the host's (pinned in pyproject.toml).
-    `options` go to `factory.create_sandbox`.
+    The variables are pickled into a temporary directory, mounted read-only for
+    the run and removed afterwards, whether the code succeeded or not. Unpickling
+    needs the sandbox's pandas and numpy to match the host's (pinned in
+    pyproject.toml). `options` go to `factory.create_sandbox`.
     """
-    tmp = tempfile.mkdtemp(prefix="eryx-variables-")
-    try:
-        pathlib.Path(tmp, "variables.pkl").write_bytes(pickle.dumps(variables))
+    with mounted_variables(variables) as volume:
         start = time.perf_counter()
-        sandbox = factory.create_sandbox(
-            volumes=[(tmp, VARIABLES_MOUNT, True)], **options
-        )
+        sandbox = factory.create_sandbox(volumes=[volume], **options)
         print(f"sandbox created in {(time.perf_counter() - start) * 1000:.1f}ms")
         return sandbox.execute(LOAD_VARIABLES + code)
-    finally:
-        shutil.rmtree(tmp)
 
 
 def main() -> None:

@@ -7,11 +7,12 @@ restores it and runs the cells, the last of which returns a bokeh `json_item`.
 
 import eryx
 import pytest
-from run_dataframe_bokeh import VARIABLES_MOUNT, make_weather
+from run_dataframe_bokeh import make_weather
 from run_session_bokeh import CELLS, LIMITS, make_snapshot
 from test_dataframe_bokeh import find_objects
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory
+from eryx_sandbox.variables import VARIABLES_MOUNT
 
 
 @pytest.fixture(scope="module")

@@ -2,6 +2,8 @@
 
 - `eryx_sandbox.factory`: cached sandbox factories with the WASI packages
   installed.
+- `eryx_sandbox.variables`: host values preloaded as sandbox globals, through
+  a pickle on a read-only mount.
 - `eryx_sandbox.pydantic_capability`: `EryxRepl`, a persistent eryx session
   as a pydantic-ai capability.
 """

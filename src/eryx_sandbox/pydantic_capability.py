@@ -24,7 +24,6 @@ Compaction capabilities can be listed in any order relative to `EryxRepl`.
 import ast
 import asyncio
 import keyword
-import pathlib
 import pickle
 import re
 import tempfile
@@ -41,6 +40,8 @@ from pydantic_ai.agent import AbstractAgent
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import InstructionChangePolicy, InstructionPart
 
+from eryx_sandbox.variables import LOAD_VARIABLES, write_variables
+
 INSTRUCTIONS = """\
 You have a persistent, sandboxed Python REPL. Run code with `run_code`: \
 variables, imports and functions carry over between calls. Each call returns the \
@@ -54,18 +55,6 @@ _WRAPPER_FRAME = re.compile(r'  File "<string>", line \d+, in _eryx_exec\n')
 _ECHO_VAR = "__eryx_repl_value"
 # A session that trapped (timeout, out of memory) fails every later call with this
 _WASM_TRAP = "WASM execution error"
-# Where a new session finds the pickled `variables`; the host directory behind it
-# is deleted once they are loaded
-_VARIABLES_MOUNT = "/eryx-variables"
-# A throwaway function keeps the loader's names out of the model's namespace
-_LOAD_VARIABLES = f"""
-def _eryx_load():
-    import pickle
-    with open("{_VARIABLES_MOUNT}/variables.pkl", "rb") as f:
-        return pickle.load(f)
-globals().update(_eryx_load())
-del _eryx_load
-"""
 
 
 @dataclass
@@ -309,10 +298,7 @@ class EryxRepl(AbstractCapability[Any]):
             with tempfile.TemporaryDirectory() as tmp:
                 volumes = list(self.volumes or [])
                 if self._variables_pickle is not None:
-                    pathlib.Path(tmp, "variables.pkl").write_bytes(
-                        self._variables_pickle
-                    )
-                    volumes.append((tmp, _VARIABLES_MOUNT, True))
+                    volumes.append(write_variables(tmp, self._variables_pickle))
                 self._session = self._create_session(volumes)
         return self._session
 
@@ -339,7 +325,7 @@ class EryxRepl(AbstractCapability[Any]):
             raise RuntimeError(f"starting the EryxRepl session failed: {e}") from e
         if self._variables_pickle is not None:
             try:
-                session.execute(_LOAD_VARIABLES)
+                session.execute(LOAD_VARIABLES)
             except eryx.EryxError as e:
                 raise RuntimeError(f"loading EryxRepl variables failed: {e}") from e
         return session

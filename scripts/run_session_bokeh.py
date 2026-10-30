@@ -13,16 +13,14 @@ and never unpickles them.
 
 import json
 import pathlib
-import pickle
-import shutil
-import tempfile
 import time
 
 import eryx
-from run_dataframe_bokeh import LOAD_VARIABLES, PAGE, VARIABLES_MOUNT, make_weather
+from run_dataframe_bokeh import PAGE, make_weather
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out
 from eryx_sandbox.pydantic_capability import prepare_cell
+from eryx_sandbox.variables import LOAD_VARIABLES, mounted_variables
 
 PREAMBLE = """
 import pandas as pd
@@ -92,17 +90,9 @@ def make_snapshot(factory: eryx.SandboxFactory) -> bytes:
     The frame's pickle is mounted only while the session loads it; the directory is
     removed here before the snapshot is taken.
     """
-    tmp = tempfile.mkdtemp(prefix="eryx-variables-")
-    try:
-        pathlib.Path(tmp, "variables.pkl").write_bytes(
-            pickle.dumps({"df": make_weather()})
-        )
-        session = factory.create_session(
-            resource_limits=LIMITS, volumes=[(tmp, VARIABLES_MOUNT, True)]
-        )
+    with mounted_variables({"df": make_weather()}) as volume:
+        session = factory.create_session(resource_limits=LIMITS, volumes=[volume])
         session.execute(LOAD_VARIABLES + PREAMBLE)
-    finally:
-        shutil.rmtree(tmp)
     return session.snapshot_state()
 
 

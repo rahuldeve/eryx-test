@@ -26,31 +26,18 @@ The code lives in the `eryx_sandbox` package (`src/eryx_sandbox/`), which
 `uv sync` installs in editable mode; `scripts/` holds the demos and the package
 build tooling. To run your own code, build a sandbox from a cached factory. Host
 values such as DataFrames go in as a pickle on a read-only mount, which a short
-preamble unpickles into the sandbox's globals. The caller creates the directory
-and removes it once the code has run (see `run_with_variables` in
-`scripts/run_dataframe_bokeh.py`):
+preamble (`LOAD_VARIABLES`) unpickles into the sandbox's globals.
+`mounted_variables` writes the pickle to a temporary directory and removes it when
+the block ends (see `eryx_sandbox.variables`):
 
 ```python
-import pathlib
-import pickle
-import shutil
-import tempfile
-
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory
+from eryx_sandbox.variables import LOAD_VARIABLES, mounted_variables
 
 factory = load_factory("bokeh", BOKEH_PACKAGES, imports=["numpy", "pandas", "bokeh.plotting"])
-tmp = tempfile.mkdtemp()
-try:
-    pathlib.Path(tmp, "variables.pkl").write_bytes(pickle.dumps({"df": df}))
-    sandbox = factory.create_sandbox(volumes=[(tmp, "/eryx-variables", True)])
-    result = sandbox.execute("""
-import pickle
-with open("/eryx-variables/variables.pkl", "rb") as f:
-    globals().update(pickle.load(f))
-result = df.describe().to_dict()
-""")
-finally:
-    shutil.rmtree(tmp)
+with mounted_variables({"df": df}) as volume:
+    sandbox = factory.create_sandbox(volumes=[volume])
+    result = sandbox.execute(LOAD_VARIABLES + "result = df.describe().to_dict()")
 print(result.result)
 ```
 
