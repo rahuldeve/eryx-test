@@ -1,7 +1,7 @@
 """Let a pydantic-ai agent analyse a host DataFrame through the eryx REPL capability.
 
-The weather frame from `run_dataframe_bokeh` is passed in as a preloaded variable,
-so the agent's first cell can use `df` directly.
+The weather frame from `run_dataframe_bokeh` is passed in as a host variable,
+so the agent's first cell can read it as `host.df`.
 Two questions are asked as two `agent.run()` calls sharing one conversation and
 one eryx session. `ClearToolResults` is set to clear aggressively so that, by the
 second question, early cell outputs are gone from the conversation; the model can
@@ -28,7 +28,7 @@ CLEARED = "[tool result cleared]"  # ClearToolResults' default placeholder
 
 QUESTIONS = [
     (
-        "`df` holds daily weather for three cities. Which city had the most rain, "
+        "`host.df` holds daily weather for three cities. Which city had the most rain, "
         "and on how many days did it rain there?"
     ),
     "For that city, what was the warmest week (7-day rolling mean of temp)?",

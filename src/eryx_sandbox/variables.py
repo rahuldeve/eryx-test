@@ -29,8 +29,7 @@ import pickle
 import shutil
 import tempfile
 import weakref
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from types import TracebackType
 from typing import Any, Self
@@ -162,36 +161,3 @@ def _atomic_write(path: pathlib.Path, data: bytes) -> None:
 
 def _is_name(name: object) -> bool:
     return isinstance(name, str) and name.isidentifier() and not keyword.iskeyword(name)
-
-
-# Replaced by VariableStore; kept until EryxRepl and the demos use it
-VARIABLES_MOUNT = "/eryx-variables"
-LOAD_VARIABLES = f"""
-def _eryx_load():
-    import pickle
-    with open("{VARIABLES_MOUNT}/variables.pkl", "rb") as f:
-        return pickle.load(f)
-globals().update(_eryx_load())
-del _eryx_load
-"""
-
-
-def write_variables(
-    directory: str | pathlib.Path, pickled: bytes
-) -> tuple[str, str, bool]:
-    """Write `pickled` (a pickled dict of name -> value) into `directory`.
-
-    Returns the volume that mounts `directory` where `LOAD_VARIABLES` reads it.
-    """
-    pathlib.Path(directory, "variables.pkl").write_bytes(pickled)
-    return (str(directory), VARIABLES_MOUNT, True)
-
-
-@contextmanager
-def mounted_variables(variables: Mapping[str, Any]) -> Iterator[tuple[str, str, bool]]:
-    """Pickle `variables` into a temporary directory and yield the volume mounting it.
-
-    The directory is removed when the block exits, whether or not its code raised.
-    """
-    with tempfile.TemporaryDirectory(prefix="eryx-variables-") as tmp:
-        yield write_variables(tmp, pickle.dumps(dict(variables)))

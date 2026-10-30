@@ -80,9 +80,10 @@ The session and its history last as long as the `EryxRepl` instance, across
 serve one conversation at a time. A cell that times out or
 runs out of memory breaks the eryx session for good. The capability then starts
 a new session and tells the model that its variables are gone. Every new session
-restores `snapshot` and then defines `variables`, if given: `variables` are host
-values pickled when the capability is created and loaded through a temporary
-mount that is removed once the session has them. `uv run poe agent` runs a demo
+restores `snapshot` and mounts the capability's `VariableStore`. `variables` is
+shorthand for one: the values are pickled when the capability is created, and
+the model reads them as `host.NAME`, a fresh copy on each read. They live on the
+host, so they survive restarts, and `store=` lets several REPLs share one. `uv run poe agent` runs a demo
 (needs `ANTHROPIC_API_KEY`).
 
 All codebase inside this repo was authored by Claude

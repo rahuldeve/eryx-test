@@ -23,15 +23,12 @@ Compaction capabilities can be listed in any order relative to `EryxRepl`.
 
 import ast
 import asyncio
-import keyword
-import pickle
 import re
-import tempfile
 import threading
 import time
 import weakref
 from collections.abc import Mapping, Sequence
-from dataclasses import KW_ONLY, dataclass, field
+from dataclasses import KW_ONLY, InitVar, dataclass, field
 from typing import Any, Self
 
 import eryx
@@ -40,7 +37,7 @@ from pydantic_ai.agent import AbstractAgent
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import InstructionChangePolicy, InstructionPart
 
-from eryx_sandbox.variables import LOAD_VARIABLES, write_variables
+from eryx_sandbox.variables import VariableStore
 
 INSTRUCTIONS = """\
 You have a persistent, sandboxed Python REPL. Run code with `run_code`: \
@@ -121,8 +118,9 @@ class EryxRepl(AbstractCapability[Any]):
 
     The eryx session is created on the first `run_code` call and kept, with the
     cell history, until `reset()`. Every new session (the first, and one after a
-    restart or `reset()`) restores `snapshot` and then defines `variables`; if
-    that fails, `run_code` raises `RuntimeError`, which ends the run. An
+    restart or `reset()`) restores `snapshot`, mounts `store` and defines `host`
+    to read it; if that fails, `run_code` raises `RuntimeError`, which ends the
+    run. Host variables live on the host, so they survive restarts. An
     instance belongs to the first agent it is given to; another agent gets a `ValueError`. It should also serve one
     conversation at a time, which isn't checked: concurrent runs of its agent
     share variables and history. Tool calls in one model response run one at a
@@ -148,12 +146,18 @@ class EryxRepl(AbstractCapability[Any]):
     snapshot: bytes | None = None
     """State from `Session.snapshot_state()` to restore when the session starts."""
 
-    variables: Mapping[str, Any] | None = None
-    """Host values to define as globals in every new session, after `snapshot`.
+    store: VariableStore | None = None
+    """Host values the model reads as `host.NAME` (see `eryx_sandbox.variables`).
 
-    Pickled when the capability is created, so later changes on the host aren't
-    seen. Unpickling happens in the sandbox, so it needs the values' modules (e.g.
-    pandas from the factory) and can't load classes defined only on the host."""
+    `None` creates one from `variables`. A store passed in belongs to the caller,
+    and can be shared by several REPLs."""
+
+    variables: InitVar[Mapping[str, Any] | None] = None
+    """Shorthand for `store=VariableStore(variables)`. The values are copied and
+    pickled when the capability is created, so later changes on the host aren't
+    seen. Unpickling happens in the sandbox, when a cell reads one, so it needs the
+    values' modules (e.g. pandas from the factory) and can't load classes defined
+    only on the host."""
 
     execution_timeout_ms: int | None = 60_000
     """Time limit for one cell; `None` removes it."""
@@ -184,20 +188,18 @@ class EryxRepl(AbstractCapability[Any]):
     _agent: weakref.ref[AbstractAgent[Any, Any]] | None = field(
         default=None, init=False, repr=False
     )
-    _variables_pickle: bytes | None = field(default=None, init=False, repr=False)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, variables: Mapping[str, Any] | None) -> None:
         # Appended instruction changes are addressed by the capability's id
         if self.id is None:
             self.id = "eryx_repl"
         if self.index_cells < 0:
             raise ValueError(f"index_cells must be >= 0, got {self.index_cells}")
-        if self.variables:
-            bad = [n for n in self.variables if not _is_name(n)]
-            if bad:
-                raise ValueError(f"variable names must be Python identifiers: {bad}")
+        if self.store is not None and variables is not None:
+            raise ValueError("pass variables or store, not both")
+        if self.store is None:
             # Pickled now so an unpicklable value fails here, not on the first call
-            self._variables_pickle = pickle.dumps(dict(self.variables))
+            self.store = VariableStore(variables)
         # Each call runs alone, in the order the model made them: the session can
         # only run one cell at a time, and later cells may use earlier ones' variables
         self._toolset = FunctionToolset[Any](
@@ -224,6 +226,11 @@ class EryxRepl(AbstractCapability[Any]):
         with self._lock:
             self._session = None
             self._cells.clear()
+
+    @property
+    def _host(self) -> VariableStore:
+        assert self.store is not None, "set in __post_init__"
+        return self.store
 
     def get_toolset(self) -> FunctionToolset[Any]:
         return self._toolset
@@ -280,12 +287,13 @@ class EryxRepl(AbstractCapability[Any]):
 
     def _instructions_text(self) -> str:
         text = INSTRUCTIONS
-        if self.variables:
-            preloaded = ", ".join(
-                f"{name} ({type(value).__name__})"
-                for name, value in self.variables.items()
+        if names := self._host.names():
+            listed = ", ".join(f"{n} ({self._host.info(n).type})" for n in names)
+            text += (
+                f"\n\nHost variables (read-only): {listed}. Read one with "
+                f"`host.NAME`, e.g. `{names[0]} = host.{names[0]}`; each read "
+                "returns a fresh copy."
             )
-            text += f"\n\nPreloaded variables: {preloaded}"
         if not self._cells:
             return text
         # -0 would slice from the start and list every cell
@@ -297,12 +305,9 @@ class EryxRepl(AbstractCapability[Any]):
 
     def _get_session(self) -> eryx.Session:
         if self._session is None:
-            # The variables' directory is only needed while the session loads them
-            with tempfile.TemporaryDirectory() as tmp:
-                volumes = list(self.volumes or [])
-                if self._variables_pickle is not None:
-                    volumes.append(write_variables(tmp, self._variables_pickle))
-                self._session = self._create_session(volumes)
+            self._session = self._create_session(
+                [*(self.volumes or []), self._host.volume]
+            )
         return self._session
 
     def _create_session(self, volumes: list[tuple[str, str, bool]]) -> eryx.Session:
@@ -311,12 +316,11 @@ class EryxRepl(AbstractCapability[Any]):
             "on_stdout": self._stdout.append,
             "on_stderr": self._stderr.append,
             "result_variable": _RESULT_VAR,
+            "volumes": volumes,
         }
-        if volumes:
-            options["volumes"] = volumes
         # Failures here are host setup problems (a bad snapshot, a module missing in
-        # the sandbox, variables too big for the limits), not something for the
-        # model to see as a cell error
+        # the sandbox, a broken mount), not something for the model to see as a
+        # cell error
         try:
             if self.factory is not None:
                 session = self.factory.create_session(**options)
@@ -327,17 +331,18 @@ class EryxRepl(AbstractCapability[Any]):
                 session.restore_state(self.snapshot)
         except eryx.EryxError as e:
             raise RuntimeError(f"starting the EryxRepl session failed: {e}") from e
-        if self._variables_pickle is not None:
-            try:
-                session.execute(LOAD_VARIABLES)
-            except eryx.EryxError as e:
-                raise RuntimeError(f"loading EryxRepl variables failed: {e}") from e
+        try:
+            session.execute(self._host.setup_code)
+        except eryx.EryxError as e:
+            raise RuntimeError(f"setting up EryxRepl host variables failed: {e}") from e
         return session
 
     def _restart(self) -> str:
         """Drop a session eryx can't run again, e.g. after a timeout traps it."""
         self._session = None
-        return _restart_note(self.snapshot is not None or bool(self.variables))
+        return _restart_note(
+            snapshot=self.snapshot is not None, host=bool(self._host.names())
+        )
 
     def _execute(self, code: str) -> Cell:
         """Run one cell, collecting output through the session's stream callbacks.
@@ -389,14 +394,13 @@ def _render_cell(cell: Cell, output: bool) -> str:
     return text
 
 
-def _restart_note(snapshot: bool) -> str:
-    return "; the sandbox was restarted and variables from earlier cells are gone" + (
-        " (the preloaded state was restored)" if snapshot else ""
-    )
-
-
-def _is_name(name: object) -> bool:
-    return isinstance(name, str) and name.isidentifier() and not keyword.iskeyword(name)
+def _restart_note(snapshot: bool, host: bool) -> str:
+    note = "; the sandbox was restarted and variables from earlier cells are gone"
+    if snapshot:
+        note += " (the preloaded state was restored)"
+    if host:
+        note += "; host variables are unchanged"
+    return note
 
 
 def _exception_name(message: str) -> str:

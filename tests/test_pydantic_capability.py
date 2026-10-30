@@ -5,6 +5,7 @@ Uses a bare `eryx.Session` rather than a package factory, so these run in second
 
 import asyncio
 import gc
+import pathlib
 import pickle
 import warnings
 from typing import Any
@@ -26,6 +27,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.compaction import ClearToolResults
 
 from eryx_sandbox.pydantic_capability import EryxRepl, prepare_cell
+from eryx_sandbox.variables import VariableStore
 
 Call = tuple[str, dict[str, object]]
 
@@ -326,39 +328,93 @@ class HostOnly:
     """A class the sandbox can't import, so it can't unpickle instances of it."""
 
 
-def test_variables_are_preloaded() -> None:
+def instructions(script: Script) -> str:
+    _, info = script.requests[-1]
+    assert info.instructions is not None
+    return info.instructions
+
+
+def test_host_variables() -> None:
     repl = EryxRepl(variables={"x": 1, "data": {"a": [1, 2]}})
     script = Script(
-        run_cells("x, data", "[n for n in ('_eryx_load', 'pickle') if n in globals()]")
+        run_cells(
+            "host.x, host['data']",
+            "[n for n in ('_eryx_setup', 'Host', 'pickle', 'json') if n in globals()]",
+        )
     )
     make_agent(repl, script).run_sync("go")
 
     values, leaked = repl.cells
     assert values.stdout == "(1, {'a': [1, 2]})\n"
     assert leaked.stdout == "[]\n"
-    _, info = script.requests[-1]
-    assert info.instructions is not None
-    assert "Preloaded variables: x (int), data (dict)" in info.instructions
+    assert (
+        "Host variables (read-only): x (int), data (dict). Read one with `host.NAME`, "
+        "e.g. `x = host.x`; each read returns a fresh copy."
+    ) in instructions(script)
 
 
-def test_variables_are_restored_on_restart() -> None:
+def test_changing_the_passed_dict_changes_nothing() -> None:
+    # issue #6: the instructions read the live dict, the sandbox had a stale copy
+    variables: dict[str, object] = {"x": 1}
+    repl = EryxRepl(variables=variables)
+    variables["x"] = [1, 2, 3]
+    variables["y"] = "added later"
+    script = Script(run_cells("host.x, 'y' in host"))
+    make_agent(repl, script).run_sync("go")
+
+    assert repl.cells[0].stdout == "(1, False)\n"
+    assert "Host variables (read-only): x (int)." in instructions(script)
+
+
+def test_no_host_variables() -> None:
+    repl = EryxRepl()
+    script = Script(run_cells("list(host)"))
+    make_agent(repl, script).run_sync("go")
+
+    assert repl.cells[0].stdout == "[]\n"
+    assert "Host variables" not in instructions(script)
+
+
+def test_model_variable_and_host_variable_are_independent() -> None:
+    repl = EryxRepl(variables={"x": 1})
+    make_agent(repl, Script(run_cells("x = host.x\nx += 1", "x, host.x"))).run_sync(
+        "go"
+    )
+    assert repl.cells[-1].stdout == "(2, 1)\n"
+
+
+def test_host_variables_survive_a_restart() -> None:
     repl = EryxRepl(variables={"x": 1}, execution_timeout_ms=1000)
-    script = Script(run_cells("x = 2", "while True: pass", "x"))
+    script = Script(run_cells("y = 2", "while True: pass", "'y' in globals(), host.x"))
     make_agent(repl, script).run_sync("go")
 
     _, timed_out, after = repl.cells
     assert timed_out.error is not None
-    assert timed_out.error.endswith("(the preloaded state was restored)")
-    assert after.stdout == "1\n"
+    assert timed_out.error.endswith(
+        "variables from earlier cells are gone; host variables are unchanged"
+    )
+    assert after.stdout == "(False, 1)\n"
 
 
-def test_variables_override_snapshot() -> None:
+def test_snapshot_and_host_variables_coexist() -> None:
     session = eryx.Session()
     session.execute("x = 'old'\ny = 'kept'")
     repl = EryxRepl(snapshot=session.snapshot_state(), variables={"x": "new"})
-    make_agent(repl, Script(run_cells("x, y"))).run_sync("go")
+    make_agent(repl, Script(run_cells("x, y, host.x"))).run_sync("go")
 
-    assert repl.cells[0].stdout == "('new', 'kept')\n"
+    assert repl.cells[0].stdout == "('old', 'kept', 'new')\n"
+
+
+def test_shared_store() -> None:
+    with VariableStore({"x": 1}) as store:
+        for repl in (EryxRepl(store=store), EryxRepl(store=store)):
+            make_agent(repl, Script(run_cells("host.x"))).run_sync("go")
+            assert repl.cells[0].stdout == "1\n"
+
+
+def test_store_and_variables_together() -> None:
+    with VariableStore() as store, pytest.raises(ValueError, match="not both"):
+        EryxRepl(store=store, variables={"x": 1})
 
 
 @pytest.mark.parametrize(
@@ -376,19 +432,37 @@ def test_bad_variables_fail_at_construction(
         EryxRepl(variables=variables)
 
 
+def test_variable_the_sandbox_cannot_load() -> None:
+    # unpickled when a cell reads it, so the model sees the error in that cell
+    repl = EryxRepl(variables={"obj": HostOnly(), "x": 1})
+    make_agent(repl, Script(run_cells("host.obj", "host.x"))).run_sync("go")
+
+    failed, ok = repl.cells
+    assert failed.error == "ModuleNotFoundError"
+    assert ok.stdout == "1\n"
+
+
+def test_session_that_cannot_start() -> None:
+    repl = EryxRepl(snapshot=b"garbage")
+    with pytest.raises(RuntimeError, match="starting the EryxRepl session failed"):
+        make_agent(repl, Script(run_cells("1"))).run_sync("go")
+    assert repl.cells == []
+
+
 @pytest.mark.parametrize(
-    ("options", "message"),
+    ("damage", "message"),
     [
-        ({"variables": {"obj": HostOnly()}}, "loading EryxRepl variables failed"),
-        (  # eryx.TimeoutError isn't an ExecutionError
-            {"variables": {"x": list(range(1_000_000))}, "execution_timeout_ms": 1},
-            "loading EryxRepl variables failed",
-        ),
-        ({"snapshot": b"garbage"}, "starting the EryxRepl session failed"),
+        ("close", "starting the EryxRepl session failed: Failed to mount"),
+        ("remove host.py", "setting up EryxRepl host variables failed"),
     ],
 )
-def test_session_that_cannot_start(options: dict[str, Any], message: str) -> None:
-    repl = EryxRepl(**options)
+def test_broken_store(damage: str, message: str) -> None:
+    store = VariableStore({"x": 1})
+    if damage == "close":
+        store.close()
+    else:
+        pathlib.Path(store.volume[0], "host.py").unlink()
+    repl = EryxRepl(store=store)
     with pytest.raises(RuntimeError, match=message):
         make_agent(repl, Script(run_cells("1"))).run_sync("go")
     assert repl.cells == []
