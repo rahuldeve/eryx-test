@@ -26,7 +26,7 @@ dev = [
 ]
 
 [tool.poe.tasks]
-fetch = { cmd = "python scripts/fetch_packages.py", help = "Download the pure-Python packages into ./packages" }
+fetch = { cmd = "python scripts/fetch_packages.py", help = "Download the pure-Python packages into ./packages (or $ERYX_PACKAGES_DIR)" }
 build-wasi = { cmd = "bash wasi-build/build_packages.sh", help = "Cross-compile numpy and pandas for WASI (slow; set JOBS to limit parallelism)" }
 packages = { sequence = ["fetch", "build-wasi"], help = "Fetch and build every sandbox package" }
 dataframe = { cmd = "python scripts/run_dataframe_bokeh.py", help = "Plot a host DataFrame with bokeh in a sandbox" }

@@ -26,7 +26,8 @@ from eryx_sandbox.factory import (
     load_factory,
 )
 
-ROOT = PACKAGES_DIR.parent
+# the repo root; PACKAGES_DIR can be elsewhere (ERYX_PACKAGES_DIR)
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 RESULTS_DIR = ROOT / "test-results"
 
 # Newer hypothesis releases need a native extension, so pin the last pure-Python one

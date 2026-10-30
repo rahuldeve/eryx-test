@@ -1,4 +1,5 @@
-"""Download the pure-Python packages for the sandbox into ./packages."""
+"""Download the pure-Python packages for the sandbox into PACKAGES_DIR
+(./packages, or $ERYX_PACKAGES_DIR)."""
 
 import hashlib
 import io
@@ -7,7 +8,7 @@ import tarfile
 import tempfile
 import urllib.request
 
-PACKAGES_DIR = pathlib.Path(__file__).resolve().parent.parent / "packages"
+from eryx_sandbox.factory import PACKAGES_DIR
 
 # name -> (url, sha256)
 PACKAGES = {
@@ -109,7 +110,7 @@ def repack_sdist(sdist: pathlib.Path, pkg_dir: str, dest: pathlib.Path) -> None:
 
 
 def main() -> None:
-    PACKAGES_DIR.mkdir(exist_ok=True)
+    PACKAGES_DIR.mkdir(parents=True, exist_ok=True)
     for name, (url, digest) in PACKAGES.items():
         dest = PACKAGES_DIR / name
         if dest.exists() and sha256(dest) == digest:

@@ -7,13 +7,14 @@
 # (wasi-wheels only has numpy 1.26 and a 3.12 pandas), so both are built here
 # with meson, pandas against this numpy.
 #
-# Output: ../packages/numpy-wasi.tar.gz, ../packages/pandas-wasi.tar.gz and
-# ../packages/pandas-tests.tar.gz (pandas' test suite, for tests/test_builtin_suites.py)
+# Output, in $ERYX_PACKAGES_DIR (default ../packages): numpy-wasi.tar.gz,
+# pandas-wasi.tar.gz and pandas-tests.tar.gz (pandas' test suite, for
+# tests/test_builtin_suites.py)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=$HERE/work
-OUT=$HERE/../packages
+OUT=${ERYX_PACKAGES_DIR:-$HERE/../packages}
 JOBS=${JOBS:-$(nproc)}
 
 WASI_WHEELS_REV=b28844f
