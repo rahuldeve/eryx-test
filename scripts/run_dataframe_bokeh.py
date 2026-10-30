@@ -1,9 +1,9 @@
 """Plot a host-built DataFrame with bokeh inside an eryx sandbox.
 
-The frame is preloaded as the sandbox global `df`: the host pickles it into a
-temporary directory mounted read-only, and `LOAD_VARIABLES` unpickles it before
-the plotting code runs (`run_with_variables`, see `eryx_sandbox.variables`). The sandbox returns bokeh's
-`json_item` for the plot, which the host embeds in an HTML page with BokehJS.
+The frame goes in through a `VariableStore`, a pickle on a read-only volume, and
+the plotting code reads it as `host.df` (`run_with_variables`, see
+`eryx_sandbox.variables`). The sandbox returns bokeh's `json_item` for the plot,
+which the host embeds in an HTML page with BokehJS.
 """
 
 import json
@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out
-from eryx_sandbox.variables import LOAD_VARIABLES, mounted_variables
+from eryx_sandbox.variables import VariableStore
 
 CODE = """
 import pandas as pd
@@ -25,6 +25,7 @@ from bokeh.models import ColumnDataSource, HoverTool
 from bokeh.plotting import figure
 from bokeh.transform import factor_cmap
 
+df = host.df
 print(df.dtypes)
 # pickle keeps the exact dtypes, unlike CSV
 assert str(df["day"].dtype) == "datetime64[ns, Asia/Kolkata]", df.dtypes
@@ -72,18 +73,18 @@ def make_weather() -> pd.DataFrame:
 def run_with_variables(
     factory: eryx.SandboxFactory, code: str, variables: dict[str, Any], **options: Any
 ) -> eryx.ExecuteResult:
-    """Run `code` in a new sandbox with `variables` defined as its globals.
+    """Run `code` in a new sandbox where `variables` are readable as `host.NAME`.
 
-    The variables are pickled into a temporary directory, mounted read-only for
-    the run and removed afterwards, whether the code succeeded or not. Unpickling
+    The variables are pickled into a `VariableStore`, mounted read-only for the
+    run and removed afterwards, whether the code succeeded or not. Unpickling
     needs the sandbox's pandas and numpy to match the host's (pinned in
     pyproject.toml). `options` go to `factory.create_sandbox`.
     """
-    with mounted_variables(variables) as volume:
+    with VariableStore(variables) as store:
         start = time.perf_counter()
-        sandbox = factory.create_sandbox(volumes=[volume], **options)
+        sandbox = factory.create_sandbox(volumes=[store.volume], **options)
         print(f"sandbox created in {(time.perf_counter() - start) * 1000:.1f}ms")
-        return sandbox.execute(LOAD_VARIABLES + code)
+        return sandbox.execute(store.setup_code + code)
 
 
 def main() -> None:

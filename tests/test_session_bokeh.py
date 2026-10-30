@@ -1,7 +1,7 @@
 """End to end: a session snapshot carries a host DataFrame into a new session.
 
-Runs the code from scripts/run_session_bokeh.py: the preamble session loads the
-frame from its pickle and is snapshotted, then a session without the volume
+Runs the code from scripts/run_session_bokeh.py: the preamble session copies the
+frame from a `VariableStore` and is snapshotted, then a session without the volume
 restores it and runs the cells, the last of which returns a bokeh `json_item`.
 """
 
@@ -12,7 +12,7 @@ from run_session_bokeh import CELLS, LIMITS, make_snapshot
 from test_dataframe_bokeh import find_objects
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory
-from eryx_sandbox.variables import VARIABLES_MOUNT
+from eryx_sandbox.variables import STORE_MOUNT
 
 
 @pytest.fixture(scope="module")
@@ -40,7 +40,7 @@ def test_snapshot_restores_frame_without_volume(
     result = session.execute(f"""
 import os
 result = {{
-    "mounted": os.path.exists("{VARIABLES_MOUNT}"),
+    "mounted": os.path.exists("{STORE_MOUNT}"),
     "dtypes": {{k: str(v) for k, v in df.dtypes.items()}},
     "rows": len(df),
 }}

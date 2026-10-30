@@ -1,8 +1,8 @@
 """End to end: a DataFrame built on the host is plotted with bokeh in a sandbox.
 
-Runs the code from scripts/run_dataframe_bokeh.py: the frame is preloaded as
-the sandbox global `df` through a pickle on a read-only volume (`run_with_variables`),
-and the sandbox returns bokeh's `json_item` for the plot, which is checked against
+Runs the code from scripts/run_dataframe_bokeh.py: the frame is read as `host.df`
+from a `VariableStore`, a pickle on a read-only volume (`run_with_variables`), and
+the sandbox returns bokeh's `json_item` for the plot, which is checked against
 the original frame.
 """
 

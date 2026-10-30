@@ -1,7 +1,8 @@
 """Plot a host-built DataFrame with bokeh from a snapshotted eryx session.
 
-A preamble session preloads the frame as `df`, the same way as `run_dataframe_bokeh`
-(a pickle on a read-only volume), and its state is saved with `snapshot_state()`.
+A preamble session copies the frame from a `VariableStore` (a pickle on a
+read-only volume, as in `run_dataframe_bokeh`) into the global `df`, and its state
+is saved with `snapshot_state()`.
 A fresh session restores that snapshot, so the frame is already loaded and the
 volume is no longer needed, then runs code cell by cell, REPL style. The last
 cell returns bokeh's `json_item` for the plot, which the host embeds in an HTML
@@ -20,10 +21,14 @@ from run_dataframe_bokeh import PAGE, make_weather
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out
 from eryx_sandbox.pydantic_capability import prepare_cell
-from eryx_sandbox.variables import LOAD_VARIABLES, mounted_variables
+from eryx_sandbox.variables import VariableStore
 
 PREAMBLE = """
 import pandas as pd
+
+# A global copy, so the snapshot carries the frame and the store isn't needed
+df = host.df
+del host
 """
 
 CELLS = [
@@ -85,14 +90,14 @@ def run_cell(session: eryx.Session, code: str) -> eryx.ExecuteResult:
 
 
 def make_snapshot(factory: eryx.SandboxFactory) -> bytes:
-    """Run PREAMBLE in a session with the frame preloaded as `df`; snapshot its state.
+    """Run PREAMBLE in a session with the frame in a store; snapshot its state.
 
-    The frame's pickle is mounted only while the session loads it; the directory is
-    removed here before the snapshot is taken.
+    The store is mounted only while PREAMBLE copies the frame into `df`; its
+    directory is removed here before the snapshot is taken.
     """
-    with mounted_variables({"df": make_weather()}) as volume:
-        session = factory.create_session(resource_limits=LIMITS, volumes=[volume])
-        session.execute(LOAD_VARIABLES + PREAMBLE)
+    with VariableStore({"df": make_weather()}) as store:
+        session = factory.create_session(resource_limits=LIMITS, volumes=[store.volume])
+        session.execute(store.setup_code + PREAMBLE)
     return session.snapshot_state()
 
 

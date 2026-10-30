@@ -25,19 +25,20 @@ uv run poe test-suites -k pandas --suite-filter groupby
 The code lives in the `eryx_sandbox` package (`src/eryx_sandbox/`), which
 `uv sync` installs in editable mode; `scripts/` holds the demos and the package
 build tooling. To run your own code, build a sandbox from a cached factory. Host
-values such as DataFrames go in as a pickle on a read-only mount, which a short
-preamble (`LOAD_VARIABLES`) unpickles into the sandbox's globals.
-`mounted_variables` writes the pickle to a temporary directory and removes it when
-the block ends (see `eryx_sandbox.variables`):
+values such as DataFrames go in through a `VariableStore`: each value is pickled
+into its own file on a read-only mount, and the store's `setup_code` defines
+`host` in the sandbox, which loads a value when it is read (`host.df`, a fresh
+copy each time). The store's directory is removed when the block ends (see
+`eryx_sandbox.variables`):
 
 ```python
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory
-from eryx_sandbox.variables import LOAD_VARIABLES, mounted_variables
+from eryx_sandbox.variables import VariableStore
 
 factory = load_factory("bokeh", BOKEH_PACKAGES, imports=["numpy", "pandas", "bokeh.plotting"])
-with mounted_variables({"df": df}) as volume:
-    sandbox = factory.create_sandbox(volumes=[volume])
-    result = sandbox.execute(LOAD_VARIABLES + "result = df.describe().to_dict()")
+with VariableStore({"df": df}) as store:
+    sandbox = factory.create_sandbox(volumes=[store.volume])
+    result = sandbox.execute(store.setup_code + "result = host.df.describe().to_dict()")
 print(result.result)
 ```
 
