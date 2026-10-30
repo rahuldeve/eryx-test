@@ -140,6 +140,12 @@ def test_state_persists_across_calls_and_runs(repl: EryxRepl) -> None:
     assert repl.cells[-1].stdout == "42\n"
 
 
+def test_result_is_an_ordinary_variable(repl: EryxRepl) -> None:
+    # eryx deletes its result variable after each cell; by default that's `result`
+    make_agent(repl, Script(run_cells("result = 42", "result"))).run_sync("go")
+    assert repl.cells[-1].stdout == "42\n"
+
+
 def test_instructions_index_cells(repl: EryxRepl) -> None:
     script = Script(run_cells("x = 1\ny = 2", "1/0"))
     make_agent(repl, script).run_sync("go")

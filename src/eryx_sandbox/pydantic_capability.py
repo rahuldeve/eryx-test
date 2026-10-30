@@ -53,6 +53,9 @@ a cell's code, and `repl_history(cell=N, output=True)` also what it printed."""
 # eryx runs user code from its own wrapper, which shows up as a traceback frame
 _WRAPPER_FRAME = re.compile(r'  File "<string>", line \d+, in _eryx_exec\n')
 _ECHO_VAR = "__eryx_repl_value"
+# eryx captures this global after each cell and then deletes it; by default it is
+# `result`, which a model's own `result` would lose between cells
+_RESULT_VAR = "__eryx_repl_result"
 # A session that trapped (timeout, out of memory) fails every later call with this
 _WASM_TRAP = "WASM execution error"
 
@@ -307,6 +310,7 @@ class EryxRepl(AbstractCapability[Any]):
             "resource_limits": self.resource_limits,
             "on_stdout": self._stdout.append,
             "on_stderr": self._stderr.append,
+            "result_variable": _RESULT_VAR,
         }
         if volumes:
             options["volumes"] = volumes
