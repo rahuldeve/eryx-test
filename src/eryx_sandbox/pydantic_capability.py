@@ -136,7 +136,9 @@ class EryxRepl(AbstractCapability[Any]):
     share variables and history. Tool calls in one model response run one at a
     time, in order. Cancelling `run_code` doesn't stop its cell (it runs in a
     thread): the next cell, and `reset()`, wait for it to finish or time out, and
-    it is still recorded.
+    it is still recorded. That wait counts against a pydantic-ai tool timeout
+    on `run_code`, so set one above `execution_timeout_ms`, or the model's retry
+    can time out too.
     """
 
     factory: eryx.SandboxFactory | None = None
