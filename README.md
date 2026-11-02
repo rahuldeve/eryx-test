@@ -86,4 +86,23 @@ the model reads them as `host.NAME`, a fresh copy on each read. They live on the
 host, so they survive restarts, and `store=` lets several REPLs share one. `uv run poe agent` runs a demo
 (needs `ANTHROPIC_API_KEY`).
 
+With `tools=`, code in a cell can call the agent's tools, which leave the model's own
+tool list. Calls go through the agent's validation and hooks, and `asyncio.gather` runs
+them concurrently:
+
+```python
+repl = EryxRepl(factory, tools=["search", "fetch"])  # 'all', or a metadata dict or function
+agent = Agent("anthropic:claude-sonnet-5-5", capabilities=[repl])
+
+# what the model writes in a cell
+hits = await host.tools.search(query="rain", limit=5)
+pages = await asyncio.gather(*[host.tools.fetch(url=h["url"]) for h in hits])
+```
+
+Tools take keyword arguments only, and can only be awaited, so a plain function or
+`df.apply` can't call them. Their time counts towards `execution_timeout_ms`, and a
+tool still running at the limit is cancelled. A tool that needs approval fails, as a
+cell can't pause for it. `eryx_sandbox.host_tools` explains why this uses one eryx
+callback rather than one per tool.
+
 All codebase inside this repo was authored by Claude

@@ -8,6 +8,9 @@
   value of a bare last expression, as a REPL would.
 - `repl_history` returns the code of earlier cells, and their output on request.
 
+With `tools=`, code in a cell can also call the agent's tools, as
+`await host.tools.NAME(...)` (see `eryx_sandbox.host_tools`).
+
 Every cell is kept on the host, and the instructions carry an index of them built
 from that record rather than from the conversation. So whatever a compaction
 strategy does to old tool calls and results (clears, summarises or drops them),
@@ -33,11 +36,26 @@ from typing import Any, Self
 import eryx
 from pydantic_ai import FunctionToolset, RunContext
 from pydantic_ai.agent import AbstractAgent
-from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.capabilities import (
+    AbstractCapability,
+    CapabilityOrdering,
+    ToolSearch,
+)
 from pydantic_ai.messages import InstructionChangePolicy, InstructionPart
+from pydantic_ai.tools import ToolSelector
+from pydantic_ai.toolsets import AbstractToolset
 
+from eryx_sandbox.host_tools import (
+    DISPATCH_CALLBACK,
+    DISPATCH_SCHEMA,
+    TOOLS_SETUP_CODE,
+    CellTools,
+    SandboxedToolset,
+    current_cell_tools,
+    error_reply,
+)
 from eryx_sandbox.repl import prepare_cell
-from eryx_sandbox.variables import VariableStore
+from eryx_sandbox.variables import STORE_MOUNT, VariableStore
 
 INSTRUCTIONS = """\
 You have a persistent, sandboxed Python REPL. Run code with `run_code`: \
@@ -55,8 +73,13 @@ call failed. Integer division by zero returns 0. Check computed values with \
 `np.isfinite` before trusting them, and before NaN-skipping steps such as \
 `np.nanmean` or `dropna` hide a failure."""
 
-# eryx runs user code from its own wrapper, which shows up as a traceback frame
-_WRAPPER_FRAME = re.compile(r'  File "<string>", line \d+, in _eryx_exec\n')
+# eryx runs user code from its own wrapper, which shows up as traceback frames, as
+# does the function behind `host.tools.NAME` (with its source line, as Python can read it)
+_WRAPPER_FRAME = re.compile(
+    r'  File "(?:<string>", line \d+, in (?:_eryx_\w+|invoke|callback)'
+    r'|_eryx_async", line \d+, in \w+'
+    rf'|{re.escape(STORE_MOUNT)}/host\.py", line \d+, in call)\n(?:    .*\n)*'
+)
 # eryx captures this global after each cell and then deletes it; by default it is
 # `result`, which a model's own `result` would lose between cells
 _RESULT_VAR = "__eryx_repl_result"
@@ -117,7 +140,8 @@ class EryxRepl(AbstractCapability[Any]):
 
     resource_limits: eryx.ResourceLimits | None = None
     """Limits for the session; `None` uses eryx's defaults (128 MB of memory).
-    Their `execution_timeout_ms` is replaced by this capability's own."""
+    Their `execution_timeout_ms` is replaced by this capability's own, and with
+    `tools` their `callback_timeout_ms` is turned off (see `eryx_sandbox.host_tools`)."""
 
     volumes: Sequence[tuple[str, str, bool]] | None = None
     """Host directories to mount, as `(host_path, sandbox_path, read_only)`."""
@@ -139,8 +163,23 @@ class EryxRepl(AbstractCapability[Any]):
     only on the host. Only an init argument: read `store` afterwards, as this
     attribute stays `None`."""
 
+    tools: ToolSelector[Any] | None = None
+    """The agent's tools for code in a cell to call, as `await host.tools.NAME(...)`.
+
+    `'all'`, a list of names, a metadata dict or a function, as for `CodeMode`. Those
+    tools leave the model's tool list, so the model only reaches them from a cell.
+    `None` gives sandboxed code no tools: each is host access the sandbox otherwise
+    lacks, and code in a cell can call it in a loop. Can't be changed afterwards. See
+    `eryx_sandbox.host_tools`, also for why this isn't one eryx callback per tool."""
+
+    max_tool_result_bytes: int = 5 << 20
+    """Larger tool results raise `ToolError` in the cell. A result takes about five
+    times its size in the sandbox, and running out of memory there crashes the session,
+    so raise this along with `max_memory_bytes`."""
+
     execution_timeout_ms: int | None = 60_000
-    """Time limit for one cell; `None` removes it."""
+    """Time limit for one cell, including the time its tools take; `None` removes it,
+    which also lets a hung tool hang its cell."""
 
     max_output_chars: int = 20_000
     """Longer cell output is clipped in the `run_code` return; history keeps it all."""
@@ -168,6 +207,8 @@ class EryxRepl(AbstractCapability[Any]):
     _agent: weakref.ref[AbstractAgent[Any, Any]] | None = field(
         default=None, init=False, repr=False
     )
+    # what the running cell's tool calls use; only set while it holds _lock
+    _cell_tools: CellTools | None = field(default=None, init=False, repr=False)
 
     def __setattr__(self, name: str, value: Any) -> None:
         # A running session keeps the store it mounted, so a new one would put the
@@ -176,6 +217,9 @@ class EryxRepl(AbstractCapability[Any]):
             raise AttributeError("EryxRepl.store can't be changed after creation")
         if name == "variables":
             raise AttributeError("EryxRepl.variables is only an init argument")
+        # A running session has its callbacks and `host.tools` from when it started
+        if name == "tools" and "tools" in self.__dict__:
+            raise AttributeError("EryxRepl.tools can't be changed after creation")
         super().__setattr__(name, value)
 
     def __post_init__(self, variables: Mapping[str, Any] | None) -> None:
@@ -189,6 +233,8 @@ class EryxRepl(AbstractCapability[Any]):
         if self.store is None:
             # Pickled now so an unpicklable value fails here, not on the first call
             self.store = VariableStore(variables)
+        if self.tools is not None and "tools" in self.store.names():
+            raise ValueError("a host variable named 'tools' would hide host.tools")
         # Each call runs alone, in the order the model made them: the session can
         # only run one cell at a time, and later cells may use earlier ones' variables
         self._toolset = FunctionToolset[Any](
@@ -227,6 +273,19 @@ class EryxRepl(AbstractCapability[Any]):
     def get_instructions(self) -> Any:
         return self._instructions
 
+    def get_ordering(self) -> CapabilityOrdering | None:
+        # Outside ToolSearch, so that its search tool stays with the model
+        if self.tools is None:
+            return None
+        return CapabilityOrdering(position="outermost", wraps=[ToolSearch])
+
+    def get_wrapper_toolset(
+        self, toolset: AbstractToolset[Any]
+    ) -> AbstractToolset[Any] | None:
+        if self.tools is None:
+            return None
+        return SandboxedToolset(toolset, self.tools, self.max_tool_result_bytes)
+
     async def run_code(self, ctx: RunContext[Any], code: str) -> str:
         """Run Python code in the persistent REPL and return what it printed.
 
@@ -234,7 +293,7 @@ class EryxRepl(AbstractCapability[Any]):
             code: Python source. Variables, imports and functions persist between
                 calls; a bare last expression is printed, as in a REPL.
         """
-        cell = await asyncio.to_thread(self._execute, code)
+        cell = await asyncio.to_thread(self._execute, code, current_cell_tools.get())
         output = cell.output() or "(no output)\n"
         if len(output) > self.max_output_chars:
             output = (
@@ -307,6 +366,15 @@ class EryxRepl(AbstractCapability[Any]):
             "result_variable": _RESULT_VAR,
             "volumes": volumes,
         }
+        if self.tools is not None:
+            options["resource_limits"] = _without_callback_timeout(self.resource_limits)
+            options["callbacks"] = [
+                {
+                    "name": DISPATCH_CALLBACK,
+                    "fn": self._dispatch,
+                    "schema": DISPATCH_SCHEMA,
+                }
+            ]
         # Failures here are host setup problems (a bad snapshot, a module missing in
         # the sandbox, a broken mount), not something for the model to see as a
         # cell error
@@ -322,6 +390,8 @@ class EryxRepl(AbstractCapability[Any]):
             raise RuntimeError(f"starting the EryxRepl session failed: {e}") from e
         try:
             session.execute(self._host.setup_code)
+            if self.tools is not None:
+                session.execute(TOOLS_SETUP_CODE)
         except eryx.EryxError as e:
             raise RuntimeError(f"setting up EryxRepl host variables failed: {e}") from e
         return session
@@ -333,7 +403,14 @@ class EryxRepl(AbstractCapability[Any]):
             snapshot=self.snapshot is not None, host=bool(self._host.names())
         )
 
-    def _execute(self, code: str) -> Cell:
+    def _dispatch(self, tool: str, args: str) -> str:
+        """The eryx callback behind `host.tools`; see `eryx_sandbox.host_tools`."""
+        cell_tools = self._cell_tools
+        if cell_tools is None:
+            return error_reply("host tools only work during an agent run")
+        return cell_tools.dispatch(tool, args)
+
+    def _execute(self, code: str, cell_tools: CellTools | None = None) -> Cell:
         """Run one cell, collecting output through the session's stream callbacks.
 
         The callbacks are needed because `ExecutionError` keeps stderr but not
@@ -344,6 +421,9 @@ class EryxRepl(AbstractCapability[Any]):
             self._stdout.clear()
             self._stderr.clear()
             error = None
+            self._cell_tools = cell_tools
+            if cell_tools is not None:
+                cell_tools.start(self.execution_timeout_ms)
             start = time.perf_counter()
             try:
                 session.execute(prepare_cell(code))
@@ -358,6 +438,8 @@ class EryxRepl(AbstractCapability[Any]):
                     error = f"sandbox crashed: {e}" + self._restart()
                 else:
                     error = _exception_name(str(e))
+            finally:
+                self._cell_tools = None
             stderr = _WRAPPER_FRAME.sub(
                 "", b"".join(self._stderr).decode(errors="replace")
             )
@@ -371,6 +453,22 @@ class EryxRepl(AbstractCapability[Any]):
             )
             self._cells.append(cell)
             return cell
+
+
+def _without_callback_timeout(
+    limits: eryx.ResourceLimits | None,
+) -> eryx.ResourceLimits:
+    """Copy `limits`, or eryx's defaults, with no time limit on a callback."""
+    limits = limits or eryx.ResourceLimits()
+    return eryx.ResourceLimits(
+        execution_timeout_ms=limits.execution_timeout_ms,
+        callback_timeout_ms=None,
+        max_memory_bytes=limits.max_memory_bytes,
+        max_callback_invocations=limits.max_callback_invocations,
+        max_fuel=limits.max_fuel,
+        max_vfs_bytes=limits.max_vfs_bytes,
+        max_open_host_files=limits.max_open_host_files,
+    )
 
 
 def _render_cell(cell: Cell, output: bool) -> str:

@@ -1,21 +1,29 @@
 """The eryx REPL capability, driven by a scripted model (no API key needed).
 
-Uses a bare `eryx.Session` rather than a package factory, so these run in seconds.
+Mostly uses a bare `eryx.Session` rather than a package factory, so these run in
+seconds.
 """
 
 import asyncio
 import copy
 import dataclasses
+import datetime
+import decimal
 import gc
+import math
 import pathlib
 import pickle
+import time
 import warnings
+from contextvars import ContextVar
 from typing import Any
 
 import eryx
 import pytest
-from pydantic_ai import Agent
+from pydantic import BaseModel
+from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.exceptions import ApprovalRequired, UsageLimitExceeded
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -26,9 +34,12 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.usage import UsageLimits
 from pydantic_ai_harness.compaction import ClearToolResults
 
-from eryx_sandbox.pydantic_capability import EryxRepl
+from eryx_sandbox.factory import NUMPY_PACKAGES, load_factory
+from eryx_sandbox.host_tools import DISPATCH_CALLBACK
+from eryx_sandbox.pydantic_capability import Cell, EryxRepl
 from eryx_sandbox.repl import prepare_cell
 from eryx_sandbox.variables import VariableStore
 
@@ -556,3 +567,554 @@ def test_rebinds_after_agent_is_gone(repl: EryxRepl) -> None:
     gc.collect()
     make_agent(repl, Script(run_cells("1 + 1"))).run_sync("go")
     assert repl.cells[0].stdout == "2\n"
+
+
+# Tools the sandbox calls as `host.tools.NAME`
+
+
+class Point(BaseModel):
+    x: int
+    when: datetime.date
+
+
+TOOLS = {"lookup", "send", "rich", "boom", "retry", "approve", "hang", "slow", "big"}
+hang_events: list[str] = []
+request_id: ContextVar[str] = ContextVar("request_id", default="unset")
+
+
+def tool_agent(
+    repl: EryxRepl, script: Script, *capabilities: AbstractCapability[Any]
+) -> Agent[int, str]:
+    agent = Agent(
+        FunctionModel(script), deps_type=int, capabilities=[*capabilities, repl]
+    )
+
+    @agent.tool
+    async def lookup(ctx: RunContext[int], query: str, limit: int = 10) -> dict:
+        """Look something up."""
+        return {
+            "query": query,
+            "limit": limit,
+            "deps": ctx.deps,
+            "request": request_id.get(),
+        }
+
+    @agent.tool_plain
+    def send(to: str, body: str) -> str:
+        return f"to={to} body={body}"
+
+    @agent.tool_plain
+    def native() -> str:
+        return "still the model's"
+
+    @agent.tool_plain
+    def rich() -> dict:
+        return {
+            "nan": math.nan,
+            "inf": math.inf,
+            "big": 2**70,
+            "date": datetime.datetime(2026, 1, 2),
+            "decimal": decimal.Decimal("1.5"),
+            "model": Point(x=1, when=datetime.date(2026, 1, 2)),
+            "bytes": b"\xff",
+            "keys": {1: "a"},
+        }
+
+    @agent.tool_plain
+    def boom() -> str:
+        raise ValueError("kaput")
+
+    @agent.tool_plain
+    def retry() -> str:
+        raise ModelRetry("use other arguments")
+
+    @agent.tool_plain
+    def approve() -> str:
+        raise ApprovalRequired
+
+    @agent.tool_plain
+    async def hang(seconds: float) -> str:
+        hang_events.clear()
+        hang_events.append("started")
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            hang_events.append("cancelled")
+            raise
+        hang_events.append("finished")
+        return "finished"
+
+    @agent.tool_plain
+    async def slow(i: int) -> tuple[int, bool]:
+        await asyncio.sleep(0.2)
+        return i, asyncio.get_running_loop() is agent_loops[-1]
+
+    @agent.tool_plain
+    def big(size: int) -> str:
+        return "x" * size
+
+    return agent
+
+
+agent_loops: list[asyncio.AbstractEventLoop] = []
+
+
+def run_tool_cells(repl: EryxRepl, *codes: str, deps: int = 1) -> Agent[int, str]:
+    agent = tool_agent(repl, Script(run_cells(*codes)))
+    agent.run_sync("go", deps=deps)
+    return agent
+
+
+def last_line(cell: Cell) -> str:
+    return cell.output().strip().splitlines()[-1]
+
+
+def test_selected_tools_move_from_the_model_to_the_description() -> None:
+    script = Script(run_cells("1"))
+    tool_agent(EryxRepl(tools=TOOLS), script).run_sync("go", deps=1)
+
+    _, info = script.requests[0]
+    assert sorted(t.name for t in info.function_tools) == [
+        "native",
+        "repl_history",
+        "run_code",
+    ]
+    run_code = next(t for t in info.function_tools if t.name == "run_code")
+    assert run_code.description is not None
+    assert "await host.tools.NAME(...)" in run_code.description
+    assert "async def lookup(*, query: str, limit: int = 10)" in run_code.description
+    assert "Look something up." in run_code.description
+    assert "async def native" not in run_code.description
+
+
+def test_no_tools_by_default() -> None:
+    script = Script(run_cells("hasattr(host, 'tools')", "host.tools"))
+    repl = EryxRepl(variables={"tools": "a variable"})
+    tool_agent(repl, script).run_sync("go", deps=1)
+
+    assert repl.cells[0].stdout == "True\n"
+    assert repl.cells[1].stdout == "'a variable'\n"
+    _, info = script.requests[0]
+    assert "lookup" in {t.name for t in info.function_tools}
+
+
+def test_no_tools_means_no_host_tools_attribute() -> None:
+    repl = EryxRepl()
+    run_tool_cells(repl, "hasattr(host, 'tools'), 'tools' in dir(host)")
+    assert repl.cells[0].stdout == "(False, False)\n"
+
+
+def test_variable_named_tools_is_refused_with_tools() -> None:
+    with pytest.raises(ValueError, match="would hide host.tools"):
+        EryxRepl(tools="all", variables={"tools": 1})
+
+
+def test_tools_cannot_be_reassigned() -> None:
+    repl = EryxRepl()
+    with pytest.raises(AttributeError, match="tools can't be changed"):
+        repl.tools = "all"
+
+
+def test_tool_call_with_keywords() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    run_tool_cells(
+        repl,
+        "await host.tools.lookup(query='q', limit=3)",
+        "'tools' in dir(host)",
+        deps=7,
+    )
+    assert repl.cells[0].stdout == (
+        "{'query': 'q', 'limit': 3, 'deps': 7, 'request': 'unset'}\n"
+    )
+    assert repl.cells[1].stdout == "True\n"
+
+
+def test_positional_arguments_are_refused() -> None:
+    # eryx's own callback would run this as to="hi", body="bob"
+    repl = EryxRepl(tools=TOOLS)
+    run_tool_cells(repl, "await host.tools.send('bob', 'hi')")
+    assert repl.cells[0].error == "TypeError"
+    assert "takes keyword arguments only" in repl.cells[0].output()
+
+
+def test_results_eryx_alone_cannot_send() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    run_tool_cells(repl, "r = await host.tools.rich()\nr")
+    assert repl.cells[0].stdout == (
+        "{'nan': nan, 'inf': inf, 'big': 1180591620717411303424, "
+        "'date': '2026-01-02T00:00:00', 'decimal': '1.5', "
+        "'model': {'x': 1, 'when': '2026-01-02'}, 'bytes': '_w==', 'keys': {'1': 'a'}}\n"
+    )
+
+
+def test_cell_values_are_encoded_as_arguments() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    run_tool_cells(
+        repl,
+        "class Scalar:\n    def tolist(self):\n        return 3\n"
+        "await host.tools.lookup(query='q', limit=Scalar())",
+        "await host.tools.lookup(query={1, 2})",
+    )
+    assert "'limit': 3" in repl.cells[0].stdout
+    assert "TypeError: set can't be passed to a host tool" in repl.cells[1].output()
+
+
+@pytest.mark.parametrize(
+    ("code", "error", "message"),
+    [
+        (
+            "await host.tools.lookup(limit=1)",
+            "eryx_host.ToolError",
+            "invalid arguments for lookup: query: Field required",
+        ),
+        ("await host.tools.boom()", "eryx_host.ToolError", "ValueError: kaput"),
+        ("await host.tools.retry()", "eryx_host.ToolError", "use other arguments"),
+        (
+            "await host.tools.approve()",
+            "eryx_host.ToolError",
+            "raised ApprovalRequired inside code mode",
+        ),
+        ("await host.tools.missing()", "eryx_host.ToolError", "no host tool 'missing'"),
+        ("await host.tools.native()", "eryx_host.ToolError", "no host tool 'native'"),
+        ("await host.tools.run_code(code='1')", "eryx_host.ToolError", "no host tool"),
+        # going around host.tools gets the same refusal, as the reply's raw JSON
+        (
+            f"await invoke({DISPATCH_CALLBACK!r}, tool='native', args='{{}}')",
+            None,
+            "no host tool",
+        ),
+    ],
+)
+def test_failed_calls_raise_in_the_cell(
+    code: str, error: str | None, message: str
+) -> None:
+    repl = EryxRepl(tools=TOOLS)
+    run_tool_cells(repl, code)
+    cell = repl.cells[0]
+    assert cell.error == error
+    assert message in last_line(cell)
+
+
+def test_tool_errors_can_be_caught_and_tracebacks_are_clean() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    run_tool_cells(
+        repl,
+        "try:\n    await host.tools.boom()\nexcept host.tools.ToolError as e:\n"
+        "    print('caught', e)",
+        "print('before')\nawait host.tools.boom()",
+    )
+    caught, raised = repl.cells
+    assert caught.stdout == "caught ValueError: kaput\n"
+    assert raised.output() == (
+        "before\nTraceback (most recent call last):\n"
+        '  File "<user>", line 2, in <module>\n'
+        "eryx_host.ToolError: ValueError: kaput\n"
+    )
+
+
+def test_tool_names_that_are_not_identifiers() -> None:
+    repl = EryxRepl(tools="all")
+    script = Script(run_cells("await host.tools.get_weather(city='x')"))
+    agent = Agent(FunctionModel(script), capabilities=[repl])
+
+    @agent.tool_plain(name="get-weather")
+    def weather(city: str) -> str:
+        return f"sunny in {city}"
+
+    agent.run_sync("go")
+    assert repl.cells[0].stdout == "'sunny in x'\n"
+
+
+def test_tool_calls_go_through_the_agents_hooks() -> None:
+    seen = []
+
+    @dataclasses.dataclass
+    class Spy(AbstractCapability[Any]):
+        async def wrap_tool_execute(self, ctx, *, call, tool_def, args, handler):
+            seen.append((call.tool_name, args))
+            return await handler(args)
+
+    script = Script(run_cells("await host.tools.send(to='a', body='b')"))
+    tool_agent(EryxRepl(tools=TOOLS), script, Spy()).run_sync("go", deps=1)
+    assert seen[1] == ("send", {"to": "a", "body": "b"})
+
+
+def test_tools_run_concurrently_on_the_agents_loop() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    script = Script(
+        run_cells(
+            "import asyncio\n"
+            "await asyncio.gather(*[host.tools.slow(i=i) for i in range(5)])"
+        )
+    )
+    agent = tool_agent(repl, script)
+
+    async def main() -> None:
+        agent_loops.append(asyncio.get_running_loop())
+        await agent.run("go", deps=1)
+
+    start = time.perf_counter()
+    asyncio.run(main())
+    assert time.perf_counter() - start < 0.8  # five at 0.2 s each, in sequence, is 1 s
+    assert repl.cells[0].stdout == (
+        "[[0, True], [1, True], [2, True], [3, True], [4, True]]\n"
+    )
+
+
+def test_sequential_tools_do_not_overlap() -> None:
+    running = 0
+    peak = 0
+    repl = EryxRepl(tools="all")
+    script = Script(
+        run_cells(
+            "import asyncio\n"
+            "await asyncio.gather(*[host.tools.one_at_a_time() for _ in range(3)])"
+        )
+    )
+    agent = Agent(FunctionModel(script), capabilities=[repl])
+
+    @agent.tool_plain(sequential=True)
+    async def one_at_a_time() -> None:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+
+    agent.run_sync("go")
+    assert repl.cells[0].error is None
+    assert peak == 1
+
+
+def test_tools_see_the_runs_context_variables() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    agent = tool_agent(repl, Script(run_cells("await host.tools.lookup(query='q')")))
+
+    async def main() -> None:
+        request_id.set("abc")
+        await agent.run("go", deps=1)
+
+    asyncio.run(main())
+    assert "'request': 'abc'" in repl.cells[0].stdout
+
+
+def test_tools_work_after_a_restart_and_in_a_later_run() -> None:
+    repl = EryxRepl(tools=TOOLS, execution_timeout_ms=1000)
+    script = Script(
+        run_cells("while True: pass", "(await host.tools.lookup(query='q'))['deps']")
+    )
+    agent = tool_agent(repl, script)
+    agent.run_sync("go", deps=1)
+
+    script.calls = run_cells("(await host.tools.lookup(query='q'))['deps']")
+    agent.run_sync("again", deps=2)
+
+    timed_out, after_restart, later_run = repl.cells
+    assert timed_out.error is not None
+    assert after_restart.stdout == "1\n"
+    assert later_run.stdout == "2\n"
+
+
+def test_tools_survive_the_model_deleting_invoke() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    run_tool_cells(repl, "del invoke", "await host.tools.send(to='a', body='b')")
+    assert repl.cells[1].stdout == "'to=a body=b'\n"
+
+
+def test_snapshot_and_tools_coexist() -> None:
+    session = eryx.Session()
+    session.execute("preloaded = 'yes'")
+    repl = EryxRepl(snapshot=session.snapshot_state(), tools=TOOLS)
+    run_tool_cells(repl, "preloaded, await host.tools.send(to='a', body='b')")
+    assert repl.cells[0].stdout == "('yes', 'to=a body=b')\n"
+
+
+def test_hung_tool_is_cancelled_at_the_time_limit_and_state_survives() -> None:
+    # eryx alone would wait for the tool however long it took
+    repl = EryxRepl(tools=TOOLS, execution_timeout_ms=800)
+    start = time.perf_counter()
+    # the hang runs on a session that already exists, so has no start-up time to spare
+    run_tool_cells(
+        repl,
+        "x = 1",
+        "await host.tools.hang(seconds=30)",
+        "x + 1",
+    )
+    assert time.perf_counter() - start < 5
+    _, hung, after = repl.cells
+    assert hung.error == "eryx_host.ToolError"
+    assert "time limit ran out" in hung.output()
+    assert hang_events == ["started", "cancelled"]
+    assert after.stdout == "2\n"
+
+
+def test_hung_tools_in_gather_are_all_cancelled() -> None:
+    repl = EryxRepl(tools=TOOLS, execution_timeout_ms=800)
+    run_tool_cells(
+        repl,
+        "x = 1",
+        "import asyncio\n"
+        "await asyncio.gather(host.tools.hang(seconds=30), host.tools.hang(seconds=30))",
+        "x + 1",
+    )
+    assert "time limit ran out" in repl.cells[1].output()
+    assert repl.cells[2].stdout == "2\n"
+
+
+def test_tool_can_outlast_a_callback_timeout() -> None:
+    # eryx would tell the sandbox `timeout` at 100 ms and leave the tool running
+    limits = eryx.ResourceLimits(callback_timeout_ms=100, max_memory_bytes=100 << 20)
+    repl = EryxRepl(tools=TOOLS, resource_limits=limits)
+    run_tool_cells(repl, "await host.tools.hang(seconds=0.4)")
+    assert repl.cells[0].stdout == "'finished'\n"
+    assert limits.callback_timeout_ms == 100  # the caller's object is left alone
+
+
+def test_callback_limit_still_applies() -> None:
+    limits = eryx.ResourceLimits(max_callback_invocations=2)
+    repl = EryxRepl(tools=TOOLS, resource_limits=limits)
+    run_tool_cells(
+        repl, "for _ in range(3):\n    await host.tools.send(to='a', body='b')"
+    )
+    assert "Callback limit exceeded" in last_line(repl.cells[0])
+
+
+@pytest.mark.parametrize("catch", [False, True])
+def test_usage_limit_ends_the_run(catch: bool) -> None:
+    calls = "for _ in range(5):\n    await host.tools.send(to='a', body='b')"
+    if catch:
+        calls = (
+            "try:\n"
+            + "\n".join("    " + line for line in calls.splitlines())
+            + "\nexcept host.tools.ToolError as e:\n    print(e)"
+        )
+    repl = EryxRepl(tools=TOOLS)
+    agent = tool_agent(repl, Script(run_cells(calls)))
+    with pytest.raises(UsageLimitExceeded):
+        agent.run_sync("go", deps=1, usage_limits=UsageLimits(tool_calls_limit=3))
+
+
+def test_nested_calls_count_as_tool_calls() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    script = Script(run_cells("await host.tools.send(to='a', body='b')"))
+    result = tool_agent(repl, script).run_sync("go", deps=1)
+    assert result.usage.tool_calls == 2
+
+
+def test_cancelling_run_code_cancels_its_tools_and_refuses_new_ones() -> None:
+    repl = EryxRepl(tools=TOOLS, execution_timeout_ms=5000)
+    agent = tool_agent(
+        repl,
+        Script(
+            run_cells(
+                "try:\n    await host.tools.hang(seconds=30)\n"
+                "except host.tools.ToolError as e:\n    print(e)\n"
+                "try:\n    await host.tools.send(to='a', body='b')\n"
+                "except host.tools.ToolError as e:\n    print(e)\n"
+            )
+        ),
+    )
+
+    async def main() -> None:
+        task = asyncio.create_task(agent.run("go", deps=1))
+        await asyncio.sleep(0.4)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # the cell's thread finishes on its own
+        await asyncio.to_thread(repl._lock.acquire)
+        repl._lock.release()
+
+    asyncio.run(main())
+    assert hang_events == ["started", "cancelled"]
+    assert repl.cells[0].stdout == (
+        "this tool call was cancelled\n"
+        "this cell was cancelled, so its tool calls don't run\n"
+    )
+
+
+def test_cancelled_cell_cannot_use_the_next_runs_context() -> None:
+    repl = EryxRepl(tools=TOOLS, execution_timeout_ms=5000)
+    script = Script(
+        run_cells(
+            "import time\nt = time.time()\nwhile time.time() - t < 0.6: pass\n"
+            "try:\n    print(await host.tools.lookup(query='q'))\n"
+            "except host.tools.ToolError as e:\n    print(e)"
+        )
+    )
+    agent = tool_agent(repl, script)
+
+    async def main() -> None:
+        task = asyncio.create_task(agent.run("go", deps=111))
+        await asyncio.sleep(0.2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        script.calls = run_cells("print('next')")
+        await agent.run("go", deps=222)
+
+    asyncio.run(main())
+    old, new = repl.cells
+    assert "222" not in old.stdout
+    assert old.stdout == "this cell was cancelled, so its tool calls don't run\n"
+    assert new.stdout == "next\n"
+
+
+def test_large_result_fails_without_crashing_the_session() -> None:
+    # 20 MiB through eryx's default 128 MB limit crashes the sandbox
+    repl = EryxRepl(tools=TOOLS)
+    run_tool_cells(
+        repl,
+        "x = 1",
+        f"await host.tools.big(size={20 << 20})",
+        f"len(await host.tools.big(size={4 << 20})), x",
+    )
+    _, large, fits = repl.cells
+    assert large.error == "eryx_host.ToolError"
+    assert "over the limit of 5242880" in large.output()
+    assert fits.stdout == f"({4 << 20}, 1)\n"
+
+
+def test_tool_called_outside_an_agent_run() -> None:
+    repl = EryxRepl(tools=TOOLS)
+    asyncio.run(repl.run_code(None, "await host.tools.send(to='a', body='b')"))  # type: ignore[arg-type]
+    assert "only work during an agent run" in repl.cells[0].output()
+
+
+@pytest.mark.parametrize("clear_first", [True, False])
+def test_tools_with_compaction_in_any_order(clear_first: bool) -> None:
+    repl = EryxRepl(tools=TOOLS)
+    script = Script(run_cells("await host.tools.send(to='a', body='b')"))
+    clear = ClearToolResults(max_messages=2, keep_pairs=1)
+    agent = Agent(
+        FunctionModel(script),
+        capabilities=[clear, repl] if clear_first else [repl, clear],
+    )
+
+    @agent.tool_plain
+    def send(to: str, body: str) -> str:
+        return to + body
+
+    agent.run_sync("go")
+    assert repl.cells[0].stdout == "'ab'\n"
+
+
+def test_numpy_values_as_tool_arguments() -> None:
+    factory = load_factory("numpy", NUMPY_PACKAGES, imports=["numpy"])
+    repl = EryxRepl(factory, tools="all")
+    script = Script(
+        run_cells(
+            "import numpy as np\n"
+            "await host.tools.describe(\n"
+            "    n=np.int64(3), values=np.array([1.5, 2.5]), day=np.datetime64('2026-01-02'),\n"
+            ")"
+        )
+    )
+    agent = Agent(FunctionModel(script), capabilities=[repl])
+
+    @agent.tool_plain
+    def describe(n: int, values: list[float], day: datetime.date) -> str:
+        return f"{n} {values} {day.isoformat()}"
+
+    agent.run_sync("go")
+    assert repl.cells[0].stdout == "'3 [1.5, 2.5] 2026-01-02'\n"
