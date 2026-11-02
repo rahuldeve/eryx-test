@@ -3,7 +3,7 @@
 import eryx
 import pytest
 
-from eryx_sandbox.factory import out
+from eryx_sandbox.factory import NUMPY_PACKAGES, load_factory, out
 
 
 @pytest.fixture(scope="module")
@@ -45,3 +45,17 @@ result = [m for m in ("numpy", "pandas", "bokeh") if importlib.util.find_spec(m)
 """
     )
     assert result.result == []
+
+
+def test_copy_numpy_scalar() -> None:
+    # numpy's __copy__ has too few parameters, which traps on wasm unless patched
+    # (build_packages.sh). Scalars' copy is the path users can actually reach.
+    factory = load_factory("numpy", NUMPY_PACKAGES, imports=["numpy"])
+    result = factory.create_sandbox().execute(
+        """
+import copy
+import numpy as np
+result = float(copy.copy(np.float64(1.5)))
+"""
+    )
+    assert result.result == 1.5

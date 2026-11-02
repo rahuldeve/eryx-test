@@ -194,12 +194,42 @@ meson_build() {
 }
 
 echo "==> numpy $NUMPY_VERSION sources"
+# Patched once, when extracted: delete $NUMPY_SRC to apply changed patches.
+# wasm's indirect calls check signatures, so these handlers, which take fewer
+# parameters than CPython calls them with (or more, for printf_float_g), trap
+# the whole sandbox instead of working: copy.copy() of any numpy scalar, and
+# private functions numpy's tests use. Harmless elsewhere, so numpy never noticed.
 if [ ! -d "$NUMPY_SRC" ]; then
   mkdir -p "$NUMPY_DIR"
   curl -sSL --fail -o "$NUMPY_DIR/numpy.tar.gz" \
     "https://files.pythonhosted.org/packages/source/n/numpy/numpy-$NUMPY_VERSION.tar.gz"
   echo "$NUMPY_SHA256  $NUMPY_DIR/numpy.tar.gz" | sha256sum -c
-  tar -xzf "$NUMPY_DIR/numpy.tar.gz" -C "$NUMPY_DIR"
+  rm -rf "$NUMPY_SRC.tmp"
+  mkdir "$NUMPY_SRC.tmp"
+  tar -xzf "$NUMPY_DIR/numpy.tar.gz" -C "$NUMPY_SRC.tmp" --strip-components=1
+  python3.14 - "$NUMPY_SRC.tmp" <<'EOF'
+import pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1], "numpy/_core/src")
+
+
+def patch(rel, pattern, repl):
+    path = root / rel
+    src, n = re.subn(pattern, repl, path.read_text())
+    assert n == 1, f"could not patch {rel}"
+    path.write_text(src)
+
+
+noargs = r"\1, PyObject *NPY_UNUSED(args))"
+getter = r"\1, void *NPY_UNUSED(closure))"
+patch("multiarray/scalartypes.c.src", r"(?m)^(gentype___copy__\(PyObject \*self)\)$", noargs)
+patch("umath/_scaled_float_dtype.c", r"(?m)^(sfloat___reduce__\(PyArray_SFloatDescr \*self)\)$", noargs)
+patch("multiarray/array_converter.c", r"(?m)^(array_converter_get_scalar_input\(PyArrayArrayConverterObject \*self)\)$", getter)
+patch("multiarray/array_method.c", r"(?m)^(boundarraymethod__supports_unaligned\(PyBoundArrayMethodObject \*self)\)$", getter)
+patch("multiarray/multiarraymodule.c", r"(\(PyCFunction\)_get_castingimpl,\s+METH_VARARGS) \| METH_KEYWORDS", r"\1")
+patch("multiarray/_multiarray_tests.c.src", r"(\(PyCFunction\)printf_float_g,\s+METH_VARARGS) ,", r"\1 | METH_KEYWORDS,")
+EOF
+  mv "$NUMPY_SRC.tmp" "$NUMPY_SRC"
 fi
 
 echo "==> numpy build"

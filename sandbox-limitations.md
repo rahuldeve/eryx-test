@@ -22,8 +22,8 @@ sandbox. Full test-suite results come from
 Some bugs in compiled code abort the WebAssembly instance (a "wasm trap")
 instead of raising. `try/except` can't catch them: the host's `execute()` call
 fails with `ExecutionError: wasm trap: ...`, and all output from that run is
-lost. Known triggers are listed under numpy (2.3). Keep separate steps in
-separate `execute()` calls if you need partial output to survive.
+lost. Keep separate steps in separate `execute()` calls if you need partial
+output to survive.
 
 ### 1.2 It's a 32-bit platform
 
@@ -84,7 +84,7 @@ These import but are limited:
 
 - `os.dup` exists but raises `OSError: [Errno 58] Not supported`. This breaks
   anything that duplicates file descriptors, e.g. numpy's `tofile`/`fromfile`
-  (section 2.4).
+  (section 2.3).
 - `os.getuid`, `os.getgid`, `os.umask`, `os.getppid` don't exist. Code that
   calls them, e.g. pytest's `tmp_path`, needs a stub (`os.getuid = lambda: 0`).
 - Error numbers are WASI's, not Linux's: a missing file is `[Errno 44]`, not
@@ -155,23 +155,7 @@ with np.errstate(all="raise"):
 Don't rely on warnings or `np.errstate` to detect bad values. Check the results
 explicitly with `np.isfinite`, `np.isnan` or `np.isinf`.
 
-### 2.3 `copy.copy()` of a numpy scalar crashes the sandbox
-
-```python
-copy.copy(np.float64(1.5))  # wasm trap: the whole execution dies (see 1.1)
-```
-
-This affects every numpy scalar type (`np.float64`, `np.int32`, `np.bool`,
-`np.str_`, `np.datetime64`, ...) and is a numpy C bug: a mismatched function
-signature that only wasm detects. It also hits scalars taken out of pandas
-objects (section 3.5).
-
-These alternatives work: `copy.deepcopy(x)`, `x.copy()`, `x.item()` (to get a
-Python number), or just using the scalar as is, since scalars are immutable.
-`copy.copy()` of arrays is fine. Watch out for libraries that call `copy.copy`
-on values you pass in.
-
-### 2.4 Binary file I/O on real paths fails
+### 2.3 Binary file I/O on real paths fails
 
 numpy's fast binary file I/O duplicates the file descriptor (1.6), so these
 raise `OSError: [Errno 58] Not supported`:
@@ -187,7 +171,7 @@ raise `OSError: [Errno 58] Not supported`:
 Text I/O (`np.savetxt`, `np.loadtxt`, `np.genfromtxt`) works, and so does
 anything that goes through an in-memory `io.BytesIO` buffer.
 
-### 2.5 Performance
+### 2.4 Performance
 
 - **No BLAS/LAPACK library.** `linalg` uses numpy's bundled `lapack_lite`, and
   matrix multiplication isn't BLAS-accelerated. Rough timings: a 500x500
@@ -200,16 +184,15 @@ anything that goes through an in-memory `io.BytesIO` buffer.
 - **Memory:** a float64 array of 25 million elements is 200 MB. Check sizes
   against the host's memory limit (1.9) before allocating.
 
-### 2.6 Smaller things
+### 2.5 Smaller things
 
 - `arr.ctypes` and `numpy.ctypeslib` import, but CPython's `ctypes` module is
   missing (1.4), so anything that actually calls C through ctypes fails.
 - `numpy.f2py` can't run (no compiler, no subprocesses), and
   `numpy.distutils` doesn't exist (removed in Python 3.12+).
-- numpy's own test suite: 26,542 passed. Every failure traces back to an item
+- numpy's own test suite: 27,044 passed. Every failure traces back to an item
   on this list (fd duplication, `mmap`, `ctypes`, processes, floating-point
-  flags, and the scalar-copy crash), apart from one more signature crash in
-  a private function only the tests call. A few test modules (`test_multiarray`,
+  flags). A few test modules (`test_multiarray`,
   `test_dtype`, `test_ufunc`, `lib/test_io`) can't be collected at all because
   they import `ctypes`, so those areas have less test coverage here.
 
@@ -220,10 +203,10 @@ anything that goes through an in-memory `io.BytesIO` buffer.
 Core pandas works: DataFrame/Series construction, indexing, groupby, merge,
 pivot, rolling/resample, datetimes and time zones, categoricals, string
 methods, CSV/JSON/pickle I/O, and pickling of any DataFrame. In pandas' own
-test suite, 171,360 tests pass. Every failure traces back to an item in
+test suite, 171,365 tests pass. Every failure traces back to an item in
 sections 1 to 3 or to something unrelated to the sandbox (3.7). The numpy items that
-matter most for pandas code are silent floating-point errors (2.2), the
-`copy.copy()` crash (2.3) and the missing filesystem (1.3).
+matter most for pandas code are silent floating-point errors (2.2) and the
+missing filesystem (1.3).
 
 ### 3.1 Only CSV, JSON and pickle file formats
 
@@ -274,10 +257,6 @@ raise `ImportError: ctypes is not available.` The Arrow PyCapsule interface
 - **No floating-point warnings:** `pd.Series([1.0]) / 0` gives `inf` and
   `np.log` of negative values gives `nan` with no `RuntimeWarning` (2.2).
   Check for bad values with `.isna()` and `np.isfinite`.
-- **`copy.copy()` of a numpy scalar taken from a DataFrame crashes the
-  sandbox**, e.g. `copy.copy(df["a"].iloc[0])` when the column is
-  float/int/bool (2.3). pandas' own scalars (`Timestamp`, `Timedelta`,
-  `Period`) are fine. Use `.item()` or `copy.deepcopy()` instead.
 - **Time zones:** "local" times and `tz="dateutil/local"` are UTC (1.8). Name
   zones explicitly (`tz="Asia/Kolkata"`). Named zones work because the pandas
   sandbox ships the `tzdata` package.
@@ -323,8 +302,7 @@ Building documents works: figures and glyphs (`line`, `scatter`, `vbar`,
 `ColumnDataSource` from DataFrames and groupbys, layouts, widgets with
 `CustomJS` callbacks, themes (including YAML theme files), map tiles via
 xyzservices, and the WebGL backend. numpy scalars as property values (e.g.
-`Span(location=df["a"].max())`) are fine; they don't hit the numpy scalar-copy
-crash (2.3).
+`Span(location=df["a"].max())`) are fine.
 
 ### 4.1 Getting a plot out
 

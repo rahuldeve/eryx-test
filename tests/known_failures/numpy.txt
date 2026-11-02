@@ -1,6 +1,3 @@
-CRASH numpy/_core/tests/test_arraymethod.py
-CRASH numpy/_core/tests/test_custom_dtypes.py
-CRASH numpy/_core/tests/test_regression.py
 ERROR numpy/_core/tests/test_casting_unittests.py
 ERROR numpy/_core/tests/test_dtype.py
 ERROR numpy/_core/tests/test_memmap.py
@@ -31,6 +28,7 @@ FAILED numpy/_core/tests/test_longdouble.py::TestFileBased::test_tofile_roundtri
 FAILED numpy/_core/tests/test_overrides.py::TestArrayLike::test_array_like_fromfile[False]
 FAILED numpy/_core/tests/test_overrides.py::TestArrayLike::test_array_like_fromfile[True]
 FAILED numpy/_core/tests/test_records.py::TestPathUsage::test_tofile_fromfile
+FAILED numpy/_core/tests/test_regression.py::TestRegression::test_fromfile_tofile_seeks
 FAILED numpy/_core/tests/test_umath.py::TestSpecialFloats::test_exp2
 FAILED numpy/_core/tests/test_umath.py::TestSpecialFloats::test_exp_exceptions
 FAILED numpy/lib/tests/test_format.py::test_file_truncated
