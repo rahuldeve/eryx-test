@@ -5,6 +5,10 @@ frame from a `VariableStore` and is snapshotted, then a session without the volu
 restores it and runs the cells, the last of which returns a bokeh `json_item`.
 """
 
+import pathlib
+import subprocess
+import sys
+
 import eryx
 import pytest
 from run_dataframe_bokeh import make_weather
@@ -31,6 +35,12 @@ def restore(factory: eryx.SandboxFactory, snapshot: bytes) -> eryx.Session:
     session = factory.create_session(resource_limits=LIMITS)
     session.restore_state(snapshot)
     return session
+
+
+def test_demo_does_not_import_pydantic_ai() -> None:
+    code = "import sys, run_session_bokeh; sys.exit('pydantic_ai' in sys.modules)"
+    scripts = pathlib.Path(__file__).resolve().parents[1] / "scripts"
+    subprocess.run([sys.executable, "-c", code], cwd=scripts, check=True)
 
 
 def test_snapshot_restores_frame_without_volume(

@@ -20,7 +20,7 @@ import eryx
 from run_dataframe_bokeh import PAGE, make_weather
 
 from eryx_sandbox.factory import BOKEH_PACKAGES, load_factory, out
-from eryx_sandbox.pydantic_capability import prepare_cell
+from eryx_sandbox.repl import prepare_cell
 from eryx_sandbox.variables import VariableStore
 
 PREAMBLE = """

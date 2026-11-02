@@ -4,6 +4,8 @@
   installed.
 - `eryx_sandbox.variables`: `VariableStore`, read-only host values that the
   sandbox reads as `host.NAME`, from pickles on a read-only mount.
+- `eryx_sandbox.repl`: `prepare_cell`, which makes a cell echo its last
+  expression, as a REPL does.
 - `eryx_sandbox.pydantic_capability`: `EryxRepl`, a persistent eryx session
   as a pydantic-ai capability.
 """

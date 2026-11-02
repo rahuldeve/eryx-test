@@ -28,7 +28,8 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai_harness.compaction import ClearToolResults
 
-from eryx_sandbox.pydantic_capability import EryxRepl, prepare_cell
+from eryx_sandbox.pydantic_capability import EryxRepl
+from eryx_sandbox.repl import prepare_cell
 from eryx_sandbox.variables import VariableStore
 
 Call = tuple[str, dict[str, object]]
