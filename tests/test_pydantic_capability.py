@@ -4,6 +4,8 @@ Uses a bare `eryx.Session` rather than a package factory, so these run in second
 """
 
 import asyncio
+import copy
+import dataclasses
 import gc
 import pathlib
 import pickle
@@ -415,6 +417,35 @@ def test_shared_store() -> None:
 def test_store_and_variables_together() -> None:
     with VariableStore() as store, pytest.raises(ValueError, match="not both"):
         EryxRepl(store=store, variables={"x": 1})
+
+
+@pytest.mark.parametrize("private", [True, False])
+def test_store_and_variables_cannot_be_reassigned(private: bool) -> None:
+    # issue #6: a running session keeps the store it mounted, so the instructions
+    # would list one store while `host` reads another
+    variables = {"x": 1}
+    repl = (
+        EryxRepl(variables=variables)
+        if private
+        else EryxRepl(store=VariableStore(variables))
+    )
+    store = repl.store
+    make_agent(repl, Script(run_cells("host.x"))).run_sync("go")
+
+    with pytest.raises(AttributeError, match="store can't be changed"):
+        repl.store = VariableStore({"y": 2})
+    with pytest.raises(AttributeError, match="only an init argument"):
+        repl.variables = {"y": 2}
+
+    assert repl.store is store
+    make_agent(repl, Script(run_cells("host.x"))).run_sync("go")
+    assert repl.cells[-1].stdout == "1\n"
+
+
+def test_copies_keep_the_store() -> None:
+    repl = EryxRepl(variables={"x": 1})
+    assert copy.copy(repl).store is repl.store
+    assert dataclasses.replace(repl).store is repl.store
 
 
 @pytest.mark.parametrize(

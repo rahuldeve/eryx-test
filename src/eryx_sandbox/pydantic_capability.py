@@ -150,14 +150,15 @@ class EryxRepl(AbstractCapability[Any]):
     """Host values the model reads as `host.NAME` (see `eryx_sandbox.variables`).
 
     `None` creates one from `variables`. A store passed in belongs to the caller,
-    and can be shared by several REPLs."""
+    and can be shared by several REPLs. It can't be replaced afterwards."""
 
     variables: InitVar[Mapping[str, Any] | None] = None
     """Shorthand for `store=VariableStore(variables)`. The values are copied and
     pickled when the capability is created, so later changes on the host aren't
     seen. Unpickling happens in the sandbox, when a cell reads one, so it needs the
     values' modules (e.g. pandas from the factory) and can't load classes defined
-    only on the host."""
+    only on the host. Only an init argument: read `store` afterwards, as this
+    attribute stays `None`."""
 
     execution_timeout_ms: int | None = 60_000
     """Time limit for one cell; `None` removes it."""
@@ -188,6 +189,15 @@ class EryxRepl(AbstractCapability[Any]):
     _agent: weakref.ref[AbstractAgent[Any, Any]] | None = field(
         default=None, init=False, repr=False
     )
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # A running session keeps the store it mounted, so a new one would put the
+        # instructions and `host` out of step
+        if name == "store" and self.__dict__.get("store") is not None:
+            raise AttributeError("EryxRepl.store can't be changed after creation")
+        if name == "variables":
+            raise AttributeError("EryxRepl.variables is only an init argument")
+        super().__setattr__(name, value)
 
     def __post_init__(self, variables: Mapping[str, Any] | None) -> None:
         # Appended instruction changes are addressed by the capability's id
