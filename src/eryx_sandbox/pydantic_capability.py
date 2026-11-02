@@ -45,7 +45,15 @@ variables, imports and functions carry over between calls. Each call returns the
 cell's stdout and stderr, and the value of a bare last expression is printed. \
 Earlier calls and their results may be cleared, summarised or dropped from this \
 conversation, but the list of cells below is complete: `repl_history(cell=N)` shows \
-a cell's code, and `repl_history(cell=N, output=True)` also what it printed."""
+a cell's code, and `repl_history(cell=N, output=True)` also what it printed.
+
+Numerical errors are silent in this sandbox, because WebAssembly has no \
+floating-point error flags. numpy never warns about division by zero, overflow or \
+invalid values, and `np.errstate` doesn't raise. `np.linalg.inv`, `solve` and \
+`cholesky` return NaNs instead of raising `LinAlgError`, so NaNs from them mean the \
+call failed. Integer division by zero returns 0. Check computed values with \
+`np.isfinite` before trusting them, and before NaN-skipping steps such as \
+`np.nanmean` or `dropna` hide a failure."""
 
 # eryx runs user code from its own wrapper, which shows up as a traceback frame
 _WRAPPER_FRAME = re.compile(r'  File "<string>", line \d+, in _eryx_exec\n')
